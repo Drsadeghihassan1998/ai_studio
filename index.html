@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>مالی داروخانه</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // این فایل منبع است و با دوبار کلیک کار نمی‌کند؛ در فایل ساخته‌شده این شرط برقرار نیست.
+      if (location.protocol === 'file:' && document.querySelector('script[src="/src/main.tsx"]')) {
+        document.getElementById('root').textContent =
+          'این فایل برنامه نیست. فایل index.html داخل پوشهٔ dist را باز کنید.';
+        document.getElementById('root').style.cssText = 'font:18px Tahoma,sans-serif;padding:48px;text-align:center';
+      }
+    </script>
+  </body>
+</html>

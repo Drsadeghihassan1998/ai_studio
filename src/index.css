@@ -1,0 +1,182 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/vazirmatn/wght.css';
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* همهٔ رنگ‌ها اینجا تعریف شده‌اند؛ هیچ رنگی در صفحه‌ها مستقیم نوشته نمی‌شود. */
+:root {
+  --bg: #f8faf9;
+  --card: #ffffff;
+  --line: #e2e8e5;
+  --text: #122126;
+  --muted: #53666b;
+  --primary: #0b7a64;
+  --on-primary: #ffffff;
+  --good: #1a9652;
+  --warn: #be750b;
+  --bad: #cf4141;
+  --shadow: 0 1px 3px 0 rgb(18 33 38 / 0.04), 0 4px 16px -2px rgb(18 33 38 / 0.05);
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #6250d6;
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  --bg: #0c1416;
+  --card: #131e21;
+  --line: #213236;
+  --text: #ebf3f1;
+  --muted: #8ea2a6;
+  --primary: #34c4a1;
+  --on-primary: #0a1517;
+  --good: #38b773;
+  --warn: #e39f37;
+  --bad: #ee6f6f;
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.35), 0 4px 16px -2px rgb(0 0 0 / 0.4);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #9085e9;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-app: var(--bg);
+  --color-card: var(--card);
+  --color-line: var(--line);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --shadow-card: var(--shadow);
+  --font-sans: 'Vazirmatn Variable', Tahoma, sans-serif;
+  --text-title: 22px;
+  --text-title--line-height: 32px;
+  --text-cardtitle: 16px;
+  --text-cardtitle--line-height: 24px;
+  --text-body: 15px;
+  --text-body--line-height: 24px;
+  --text-note: 13px;
+  --text-note--line-height: 20px;
+  --text-key: 28px;
+  --text-key--line-height: 40px;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 24px;
+  font-variant-numeric: tabular-nums;
+  -webkit-text-size-adjust: 100%;
+}
+button,
+input,
+select {
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+button,
+summary,
+select {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* کشو: در دسکتاپ از کنار، در موبایل از پایین */
+dialog.drawer {
+  position: fixed;
+  margin: 0;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  padding: 0;
+  background: var(--card);
+  color: var(--text);
+  inset-block: 0;
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  width: min(480px, 100vw);
+  height: 100dvh;
+  animation: drawer-side 180ms ease-out;
+}
+dialog.drawer.wide {
+  width: min(720px, 100vw);
+}
+dialog.drawer::backdrop {
+  background: rgb(14 21 23 / 0.4);
+  animation: fade 180ms ease-out;
+}
+@media (max-width: 767px) {
+  dialog.drawer,
+  dialog.drawer.wide {
+    inset-block-start: auto;
+    inset-inline: 0;
+    width: 100vw;
+    height: auto;
+    max-height: 88dvh;
+    border-radius: 12px 12px 0 0;
+    animation: drawer-up 180ms ease-out;
+  }
+}
+@keyframes drawer-side {
+  from {
+    transform: translateX(-24px);
+    opacity: 0;
+  }
+}
+@keyframes drawer-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes rise {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+.toast {
+  animation: rise 180ms ease-out;
+}
+.skeleton {
+  background: var(--line);
+  border-radius: 8px;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::backdrop,
+  dialog.drawer {
+    animation: none !important;
+    transition: none !important;
+  }
+}

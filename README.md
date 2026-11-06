@@ -1,11 +1,17 @@
-<div align="center">
+# مالی داروخانه
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+وب‌اپ شخصی برای سود واقعی، پیش‌بینی نقدینگی و ارزیابی آفر یک داروخانهٔ ایرانی. بدون سرور؛ داده‌ها فقط در مرورگر همان دستگاه می‌ماند.
 
-  <h1>Built with AI Studio</h2>
+## اجرا برای کاربر
+فایل `dist/index.html` را با دوبار کلیک در Chrome یا Edge باز کنید. برای ساختن آن:
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+```bash
+npm install
+npm run build
+```
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## ادامهٔ ساخت با هوش مصنوعی
+- **ابزارهایی که به پوشه یا گیت‌هاب دسترسی دارند** (Claude Code، Codex، Gemini CLI، Cursor و مانند آن‌ها): پروژه را باز کنید و بگویید «اول AGENTS.md را بخوان».
+- **هوش مصنوعی‌های وبی** (مانند Google AI Studio): `npm run pack:ai` را اجرا کنید و فایل `dist/project-for-ai.txt` را به آن بدهید.
 
-</div>
+قواعد کامل در [AGENTS.md](AGENTS.md) و دستور اصلی پروژه در [docs/BRIEF.md](docs/BRIEF.md) است.
