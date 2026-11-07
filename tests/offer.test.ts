@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { earlyPayDiscount } from '../src/lib/calc';
 import {
-  advantage, breakEvenRate, cashDelta, compareQuickOffers, decide, endsAfter, expiryCheck, liquidity, monthsToSell, normalPayments,
+  advantage, breakEvenRate, cashDelta, compareQuickOffers, decide, discountPerMonthFromCash, endsAfter, expiryCheck, liquidity, monthsToSell, normalPayments,
   offerCashSeries, optimize, parseOfferText, paymentOptions, present, qtyCap, revenueFlows, sensitivity, totalUnits, unitRevenue,
   verdictText, type CashContext, type OfferInput,
 } from '../src/lib/offer';
@@ -243,6 +243,56 @@ describe('بقیهٔ محاسبات', () => {
       expect(opt.paid).toBeGreaterThanOrEqual(0);
     }
   });
+  it('جداکنندهٔ هزارگان، واژهٔ نقداً و بازمحاسبهٔ تخفیف ماهانه از تخفیف نقدی کل', () => {
+    const t1 = parseOfferText('1,000+200 چک 6 ماهه');
+    expect(t1.buyQty).toBe(1000);
+    expect(t1.freeQty).toBe(200);
+    expect(t1.chequeMonths).toBe(6);
+
+    const t2 = parseOfferText('۱٬۰۰۰ عدد بخر ۲۰۰ عدد آفر چک ۴ ماهه');
+    expect(t2.buyQty).toBe(1000);
+    expect(t2.freeQty).toBe(200);
+    expect(t2.chequeMonths).toBe(4);
+
+    const t3 = parseOfferText('100+20 چک 6 ماهه، نقد 12 درصد تخفیف');
+    expect(t3.cashDiscount).toBeCloseTo(0.12);
+    expect(t3.discountPerMonth).toBeCloseTo(0.02);
+
+    const t4 = parseOfferText('100+20 چک 6 ماهه، نقداً 12 درصد تخفیف');
+    expect(t4.cashDiscount).toBeCloseTo(0.12);
+    expect(t4.discountPerMonth).toBeCloseTo(0.02);
+
+    const t5 = parseOfferText('100+20 چک 6 ماهه نقدا 12% تخفیف');
+    expect(t5.cashDiscount).toBeCloseTo(0.12);
+    expect(t5.discountPerMonth).toBeCloseTo(0.02);
+
+    expect(discountPerMonthFromCash(0.12, 4)).toBeCloseTo(0.03);
+  });
+  it('مقایسهٔ سریع: وقتی پیشنهاد بی‌خطر زیان‌ده است ولی پیشنهاد پرخطر سودده است، noneBeatsNormal برابر true و riskyBetter پر می‌شود', () => {
+    const ctx = {
+      monthlyUse: 50,
+      unitPrice: 100000,
+      r: 0.03,
+      normalMonths: 3,
+      monthsToExpiry: 36,
+      safetyMonths: 2,
+      stock: 0,
+    };
+    const offerS = { id: 'S', title: 'پیشنهاد S', rawText: '', buyQty: 1000, freeQty: 250, chequeMonths: 6, discountPerMonth: 0 };
+    const offerR = { id: 'R', title: 'پیشنهاد R', rawText: '', buyQty: 1000, freeQty: 750, chequeMonths: 6, discountPerMonth: 0 };
+
+    const cmp = compareQuickOffers([offerS, offerR], ctx);
+    const evS = cmp.evaluations.find((e) => e.id === 'S')!;
+    const evR = cmp.evaluations.find((e) => e.id === 'R')!;
+
+    expect(evS.expiryRisky).toBe(false);
+    expect(Math.abs(evS.totalAdvantage - -1680617)).toBeLessThanOrEqual(1);
+    expect(evR.expiryRisky).toBe(true);
+    expect(Math.abs(evR.totalAdvantage - 17520403)).toBeLessThanOrEqual(1);
+    expect(cmp.noneBeatsNormal).toBe(true);
+    expect(cmp.riskyBetter?.id).toBe('R');
+  });
 });
+
 
 

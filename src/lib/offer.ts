@@ -332,9 +332,19 @@ export interface ParsedOfferText {
 }
 
 /**
+ * محاسبهٔ نرخ تخفیف زودپرداخت ماهانه از روی تخفیف کل نقدی و مدت چک.
+ * فرمول: discountPerMonth = cashDiscount ÷ chequeMonths (برای chequeMonths > 0؛ وگرنه 0).
+ * مثال: cashDiscount = 0.12 با مدت چک ۴ ماه ← discountPerMonth = 0.03.
+ */
+export function discountPerMonthFromCash(cashDiscount: number | undefined, chequeMonths: number): number {
+  if (cashDiscount === undefined || !(cashDiscount > 0) || !(chequeMonths > 0)) return 0;
+  return Number((cashDiscount / chequeMonths).toFixed(8));
+}
+
+/**
  * استخراج خودکار تعداد خرید، تعداد آفر رایگان، مهلت چک (ماه یا روز) و تخفیف از متن فارسی یا انگلیسی.
  * قواعد تخفیف:
- * ۱. اگر درصد تخفیف کنار «نقد» یا «نقدی» باشد و واژه‌های ماهانه («ماهانه»، «در ماه»، «هر ماه»، «ماهی») کنارش نباشد:
+ * ۱. اگر درصد تخفیف کنار «نقد»، «نقدی»، «نقداً» یا «نقدا» باشد و واژه‌های ماهانه («ماهانه»، «در ماه»، «هر ماه»، «ماهی») کنارش نباشد:
  *    تخفیف کل نقدی (cashDiscount) است و اگر chequeMonths > 0 معلوم باشد، discountPerMonth = cashDiscount ÷ chequeMonths.
  * ۲. اگر واژه‌های ماهانه کنارش باشد، تخفیف ماهانه (discountPerMonth) است.
  * ۳. اگر هیچ‌کدام کنارش نباشد، ماهانه فرض می‌شود و discountAmbiguous: true برمی‌گردد.
@@ -350,6 +360,8 @@ export function parseOfferText(raw: string): ParsedOfferText {
     })
     .replace(/[يى]/g, 'ی')
     .replace(/ك/g, 'ک')
+    .replace(/(\d)[,٬](?=\d{3}(?:\D|$))/g, '$1')
+    .replace(/(\d)[,٬](?=\d{3}(?:\D|$))/g, '$1')
     .replace(/[,٬،]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -368,7 +380,7 @@ export function parseOfferText(raw: string): ParsedOfferText {
   const discMatch =
     text.match(/تخفیف[^\d]*(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)/) ??
     text.match(/(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)\s*تخفیف/) ??
-    text.match(/(?:نقد|نقدی)[^\d]*(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)/);
+    text.match(/(?:نقدی?|نقدا\u064B?|نقداً)[^\d]*(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)/);
 
   // ۲. استخراج مهلت چک بر حسب ماه یا روز (تبدیل روز به ماه: Math.round(N ÷ 30))
   const monthMatch =
@@ -384,7 +396,7 @@ export function parseOfferText(raw: string): ParsedOfferText {
     out.chequeMonths = Math.round(Number(monthMatch[1]));
   } else if (dayMatch) {
     out.chequeMonths = Math.round(Number(dayMatch[1]) / 30);
-  } else if (/(?:^|\s)(?:نقد|نقدی)(?:\s|$)/.test(text) && !discMatch) {
+  } else if (/(?:^|\s)(?:نقدی?|نقدا\u064B?|نقداً)(?:\s|$)/.test(text) && !discMatch) {
     out.chequeMonths = 0;
   }
 
@@ -392,14 +404,14 @@ export function parseOfferText(raw: string): ParsedOfferText {
   if (discMatch) {
     const rate = Number(discMatch[1]) / 100;
     const hasMonthly = /(?:ماهانه|در\s*ماه|هر\s*ماه|(?:^|\s)ماهی(?:\s|$|\d))/.test(text);
-    const hasCash = /(?:^|\s)(?:نقد|نقدی)(?:\s|$)/.test(text);
+    const hasCash = /(?:^|\s)(?:نقدی?|نقدا\u064B?|نقداً)(?:\s|$)/.test(text);
 
     if (hasMonthly) {
       out.discountPerMonth = rate;
     } else if (hasCash) {
       out.cashDiscount = rate;
       if (out.chequeMonths !== undefined && out.chequeMonths > 0) {
-        out.discountPerMonth = Number((rate / out.chequeMonths).toFixed(8));
+        out.discountPerMonth = discountPerMonthFromCash(rate, out.chequeMonths);
       }
     } else {
       out.discountPerMonth = rate;
@@ -521,7 +533,10 @@ export function evaluateQuickOffer(row: QuickOfferRow, ctx: QuickCompareContext)
   const freeQty = Math.max(0, row.freeQty);
   const totalQty = buyQty + freeQty;
   const chequeMonths = Math.max(0, Math.round(row.chequeMonths));
-  const discountPerMonth = Math.max(0, row.discountPerMonth || 0);
+  const discountPerMonth =
+    row.cashDiscount !== undefined && row.cashDiscount > 0
+      ? discountPerMonthFromCash(row.cashDiscount, chequeMonths)
+      : Math.max(0, row.discountPerMonth || 0);
 
   // پیدا کردن بهترین ماه پرداخت (نقد با تخفیف زودپرداخت یا چک در سررسید)
   let bestPayMonth = chequeMonths;
@@ -617,7 +632,8 @@ export function evaluateQuickOffer(row: QuickOfferRow, ctx: QuickCompareContext)
  * ۱. اولویت با پیشنهادهای بدون خطر انقضا (!expiryRisky)
  * ۲. بیشترین مزیت ارزش فعلی نسبت به خرید عادی ماه‌به‌ماه (totalAdvantage)
  * ۳. در صورت برابری، بیشترین تخفیف واقعی امروز هر واحد (realDiscountRate)
- * اگر totalAdvantage همهٔ پیشنهادها منفی یا صفر باشد، پرچم noneBeatsNormal: true برگردانده می‌شود.
+ * اگر پیشنهاد اول (winner) دارای totalAdvantage ≤ 0 باشد، پرچم noneBeatsNormal: true برمی‌گردد.
+ * اگر پیشنهاد سوددهی (totalAdvantage > 0) فقط به‌خاطر خطر انقضا عقب افتاده باشد، در فیلد riskyBetter برگردانده می‌شود.
  */
 export function compareQuickOffers(rows: QuickOfferRow[], ctx: QuickCompareContext) {
   const valid = rows
@@ -630,6 +646,7 @@ export function compareQuickOffers(rows: QuickOfferRow[], ctx: QuickCompareConte
       winner: null as QuickOfferEvaluation | null,
       runnerUp: null as QuickOfferEvaluation | null,
       noneBeatsNormal: false,
+      riskyBetter: null as QuickOfferEvaluation | null,
     };
   }
 
@@ -639,13 +656,24 @@ export function compareQuickOffers(rows: QuickOfferRow[], ctx: QuickCompareConte
     return b.realDiscountRate - a.realDiscountRate;
   });
 
-  const noneBeatsNormal = valid.every((e) => e.totalAdvantage <= 0);
+  const topCandidate = sorted[0] ?? null;
+  const noneBeatsNormal = !topCandidate || topCandidate.totalAdvantage <= 0;
+
+  // پیشنهادی که مزیت مثبت دارد اما به دلیل خطر انقضا عقب افتاده است
+  const riskyBetter =
+    sorted.find(
+      (e) =>
+        e.expiryRisky &&
+        e.totalAdvantage > 0 &&
+        (!topCandidate || !topCandidate.expiryRisky && e.totalAdvantage > topCandidate.totalAdvantage),
+    ) ?? null;
 
   return {
     evaluations: valid,
-    winner: sorted[0] ?? null,
+    winner: topCandidate,
     runnerUp: sorted[1] ?? null,
     noneBeatsNormal,
+    riskyBetter,
   };
 }
 

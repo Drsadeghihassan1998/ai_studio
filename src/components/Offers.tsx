@@ -7,8 +7,9 @@ import { insurerColumn } from '../lib/drugbank';
 import { faDate, faNumber, faPercent, fullMoney } from '../lib/format';
 import { latestPurchases } from '../lib/invoice';
 import { currentMonthKey, jalaliParts, monthLabel, parseJalaliDate, todayISO } from '../lib/jalali';
+import { earlyPayDiscount } from '../lib/calc';
 import {
-  advantage, compareQuickOffers, decide, expiryCheck, liquidity, monthsToSell, offerCashSeries, parseOfferText,
+  advantage, compareQuickOffers, decide, discountPerMonthFromCash, expiryCheck, liquidity, monthsToSell, offerCashSeries, parseOfferText,
   paymentOptions, paymentPhrase, presentProfit, sensitivity, totalUnits, verdictText,
   type CashContext, type MixRow, type OfferInput, type QuickCompareContext, type QuickOfferRow,
 } from '../lib/offer';
@@ -29,6 +30,7 @@ interface Form extends OfferInput {
   title: string;
   drugId: number | null;
   distributorId: number | null;
+  cashDiscount?: number;
 }
 
 interface SavedResult {
@@ -390,19 +392,26 @@ function QuickCompare({
           parsed.cashDiscount !== undefined && (parsed.chequeMonths === undefined || parsed.chequeMonths <= 0);
         const nextChequeMonths =
           parsed.chequeMonths !== undefined ? parsed.chequeMonths : missingChequeForCash ? 0 : r.chequeMonths;
+        const nextCashDiscount =
+          parsed.cashDiscount !== undefined
+            ? parsed.cashDiscount
+            : parsed.discountPerMonth !== undefined
+              ? undefined
+              : r.cashDiscount;
+        const nextDiscountPerMonth =
+          nextCashDiscount !== undefined
+            ? discountPerMonthFromCash(nextCashDiscount, nextChequeMonths)
+            : parsed.discountPerMonth !== undefined
+              ? parsed.discountPerMonth
+              : r.discountPerMonth;
         return {
           ...r,
           rawText,
           buyQty: parsed.buyQty !== undefined ? parsed.buyQty : r.buyQty,
           freeQty: parsed.freeQty !== undefined ? parsed.freeQty : r.freeQty,
           chequeMonths: nextChequeMonths,
-          discountPerMonth:
-            parsed.discountPerMonth !== undefined
-              ? parsed.discountPerMonth
-              : missingChequeForCash
-                ? 0
-                : r.discountPerMonth,
-          cashDiscount: parsed.cashDiscount,
+          discountPerMonth: nextDiscountPerMonth,
+          cashDiscount: nextCashDiscount,
           discountAmbiguous: parsed.discountAmbiguous,
           needsChequeMonthsForCashDiscount: missingChequeForCash,
         };
@@ -431,7 +440,7 @@ function QuickCompare({
     setRows((prev) => prev.filter((r) => r.id !== id));
   };
 
-  const { evaluations, winner, runnerUp, noneBeatsNormal } = useMemo(() => compareQuickOffers(rows, ctx), [rows, ctx]);
+  const { evaluations, winner, runnerUp, noneBeatsNormal, riskyBetter } = useMemo(() => compareQuickOffers(rows, ctx), [rows, ctx]);
   const hasRealPrice = ctx.unitPrice > 0;
   const effectiveBasePrice = ctx.unitPrice > 0 ? ctx.unitPrice : 100_000;
 
@@ -598,24 +607,36 @@ function QuickCompare({
                     value={row.chequeMonths}
                     onChange={(chequeMonths) => {
                       const m = Math.round(chequeMonths);
-                      if (row.needsChequeMonthsForCashDiscount && row.cashDiscount !== undefined && m > 0) {
+                      if (row.cashDiscount !== undefined) {
                         updateRow(row.id, {
                           chequeMonths: m,
-                          discountPerMonth: Number((row.cashDiscount / m).toFixed(8)),
-                          needsChequeMonthsForCashDiscount: false,
+                          discountPerMonth: discountPerMonthFromCash(row.cashDiscount, m),
+                          needsChequeMonthsForCashDiscount: m <= 0,
                         });
                       } else {
                         updateRow(row.id, { chequeMonths: m });
                       }
                     }}
                   />
-                  <PercentField
-                    label="تخفیف زودپرداخت"
-                    value={row.discountPerMonth}
-                    onChange={(discountPerMonth) => updateRow(row.id, { discountPerMonth, discountAmbiguous: false })}
-                  />
+                  <div>
+                    <PercentField
+                      label="تخفیف زودپرداخت"
+                      value={row.discountPerMonth}
+                      onChange={(discountPerMonth) =>
+                        updateRow(row.id, {
+                          discountPerMonth,
+                          cashDiscount: undefined,
+                          discountAmbiguous: false,
+                          needsChequeMonthsForCashDiscount: false,
+                        })
+                      }
+                    />
+                    <p className="mt-1 text-note text-muted">
+                      تخفیف کل نقد: {faPercent(row.cashDiscount ?? earlyPayDiscount(row.discountPerMonth, row.chequeMonths, 0))}
+                    </p>
+                  </div>
                 </div>
-                {row.discountPerMonth * row.chequeMonths > 0.5 && (
+                {(row.cashDiscount ?? row.discountPerMonth * row.chequeMonths) > 0.5 && (
                   <p className="flex items-center gap-2 text-note text-warn" role="alert">
                     <TriangleAlert size={16} className="shrink-0 text-warn" aria-hidden />
                     <span>تخفیف کل نقد بیش از ۵۰٪ است؛ عدد را بررسی کنید.</span>
@@ -701,8 +722,14 @@ function QuickCompare({
               />
             </div>
             <p className="mt-4 text-body text-muted">
-              با توجه به مصرف ماهانهٔ <strong>{faNumber(ctx.monthlyUse)} عدد</strong> و هزینهٔ پول <strong>{faPercent(ctx.r)}</strong> در ماه، خواب سرمایه در قفسه باعث می‌شود ارزش امروز پرداخت همهٔ پیشنهادهای واردشده از خرید عادی ماه‌به‌ماه (با چک {faNumber(ctx.normalMonths)} ماهه) بیشتر تمام شود.
+              با توجه به مصرف ماهانهٔ <strong>{faNumber(ctx.monthlyUse)} عدد</strong> و هزینهٔ پول <strong>{faPercent(ctx.r)}</strong> در ماه، خواب سرمایه در قفسه باعث می‌شود ارزش امروز پرداخت همهٔ پیشنهادهای امن از خرید عادی ماه‌به‌ماه (با چک {faNumber(ctx.normalMonths)} ماهه) بیشتر تمام شود.
             </p>
+            {riskyBetter && (
+              <p className="mt-2 flex items-center gap-2 text-note font-medium text-warn">
+                <TriangleAlert size={16} className="shrink-0 text-warn" aria-hidden />
+                <span>{riskyBetter.title} از خرید عادی بهتر است ولی خطر انقضا دارد</span>
+              </p>
+            )}
           </Card>
         ) : evaluations.length >= 2 ? (
           <Card className="border-good">
@@ -741,6 +768,12 @@ function QuickCompare({
                 </li>
               )}
             </ul>
+            {riskyBetter && (
+              <p className="mt-3 flex items-center gap-2 text-note font-medium text-warn">
+                <TriangleAlert size={16} className="shrink-0 text-warn" aria-hidden />
+                <span>{riskyBetter.title} از خرید عادی بهتر است ولی خطر انقضا دارد</span>
+              </p>
+            )}
           </Card>
         ) : null
       )}
@@ -1010,10 +1043,20 @@ export function Offers() {
   const pickDistributor = (id: number) => {
     const row: Distributor | undefined = data.distributors.find((d) => d.id === id);
     if (!row) return set({ distributorId: null });
+    const nextDiscount =
+      current.cashDiscount !== undefined
+        ? discountPerMonthFromCash(current.cashDiscount, row.baseChequeMonths)
+        : row.earlyPayDiscountPerMonth;
     setForm({
-      ...current, distributorId: id, baseMonths: row.baseChequeMonths, normalMonths: row.baseChequeMonths,
-      discountPerMonth: row.earlyPayDiscountPerMonth,
+      ...current,
+      distributorId: id,
+      baseMonths: row.baseChequeMonths,
+      normalMonths: row.baseChequeMonths,
+      discountPerMonth: nextDiscount,
     });
+    if (current.cashDiscount !== undefined && row.baseChequeMonths > 0) {
+      setSmartPendingCashDiscount(null);
+    }
   };
 
   const applySmartOfferText = (raw: string) => {
@@ -1030,13 +1073,20 @@ export function Offers() {
       patch.everyX = parsed.buyQty;
     }
     if (parsed.freeQty !== undefined) patch.freeY = parsed.freeQty;
-    if (parsed.chequeMonths !== undefined) {
-      patch.baseMonths = parsed.chequeMonths;
-    } else if (missingChequeForCash) {
-      patch.baseMonths = 0;
-      patch.discountPerMonth = 0;
+    const nextMonths =
+      parsed.chequeMonths !== undefined ? parsed.chequeMonths : missingChequeForCash ? 0 : current.baseMonths;
+    if (parsed.chequeMonths !== undefined || missingChequeForCash) {
+      patch.baseMonths = nextMonths;
     }
-    if (parsed.discountPerMonth !== undefined) patch.discountPerMonth = parsed.discountPerMonth;
+    if (parsed.cashDiscount !== undefined) {
+      patch.cashDiscount = parsed.cashDiscount;
+      patch.discountPerMonth = discountPerMonthFromCash(parsed.cashDiscount, nextMonths);
+    } else if (parsed.discountPerMonth !== undefined) {
+      patch.cashDiscount = undefined;
+      patch.discountPerMonth = parsed.discountPerMonth;
+    } else if (parsed.chequeMonths !== undefined && current.cashDiscount !== undefined) {
+      patch.discountPerMonth = discountPerMonthFromCash(current.cashDiscount, parsed.chequeMonths);
+    }
     if (Object.keys(patch).length > 0) keepNormal(patch);
   };
 
@@ -1100,6 +1150,7 @@ export function Offers() {
                 baseMonths: row.chequeMonths,
                 normalMonths: qCtx.normalMonths,
                 discountPerMonth: row.discountPerMonth,
+                cashDiscount: row.cashDiscount,
                 monthlyUse: qCtx.monthlyUse || base.monthlyUse,
                 normalQty: qCtx.monthlyUse || base.normalQty,
                 monthsToExpiry: qCtx.monthsToExpiry,
@@ -1178,10 +1229,17 @@ export function Offers() {
                 value={current.baseMonths}
                 onChange={(baseMonths) => {
                   const m = Math.round(baseMonths);
-                  if (smartPendingCashDiscount !== null && m > 0) {
+                  if (current.cashDiscount !== undefined) {
                     keepNormal({
                       baseMonths: m,
-                      discountPerMonth: Number((smartPendingCashDiscount / m).toFixed(8)),
+                      discountPerMonth: discountPerMonthFromCash(current.cashDiscount, m),
+                    });
+                    if (m > 0) setSmartPendingCashDiscount(null);
+                  } else if (smartPendingCashDiscount !== null && m > 0) {
+                    keepNormal({
+                      baseMonths: m,
+                      cashDiscount: smartPendingCashDiscount,
+                      discountPerMonth: discountPerMonthFromCash(smartPendingCashDiscount, m),
                     });
                     setSmartPendingCashDiscount(null);
                   } else {
@@ -1189,19 +1247,25 @@ export function Offers() {
                   }
                 }}
               />
-              <PercentField
-                label="تخفیف زودپرداخت در هر ماه"
-                value={current.discountPerMonth}
-                onChange={(discountPerMonth) => {
-                  setSmartDiscountAmbiguous(false);
-                  set({ discountPerMonth });
-                }}
-              />
+              <div>
+                <PercentField
+                  label="تخفیف زودپرداخت در هر ماه"
+                  value={current.discountPerMonth}
+                  onChange={(discountPerMonth) => {
+                    setSmartDiscountAmbiguous(false);
+                    setSmartPendingCashDiscount(null);
+                    set({ discountPerMonth, cashDiscount: undefined });
+                  }}
+                />
+                <p className="mt-1 text-note text-muted">
+                  تخفیف کل نقد: {faPercent(current.cashDiscount ?? earlyPayDiscount(current.discountPerMonth, current.baseMonths, 0))}
+                </p>
+              </div>
               <NumberField label="ماه تا انقضا" value={current.monthsToExpiry} onChange={(monthsToExpiry) => set({ monthsToExpiry })} />
               <NumberField label="موجودی فعلی" value={current.stock} onChange={(stock) => set({ stock })} />
               <PercentField label="هزینهٔ پول ماهانه" value={current.r} onChange={(r) => set({ r })} />
             </div>
-            {current.discountPerMonth * current.baseMonths > 0.5 && (
+            {(current.cashDiscount ?? current.discountPerMonth * current.baseMonths) > 0.5 && (
               <p className="mt-2 flex items-center gap-2 text-note text-warn" role="alert">
                 <TriangleAlert size={16} className="shrink-0 text-warn" aria-hidden />
                 <span>تخفیف کل نقد بیش از ۵۰٪ است؛ عدد را بررسی کنید.</span>
