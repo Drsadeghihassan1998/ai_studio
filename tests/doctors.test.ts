@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { forecastError, monthlyRx, movingAverage3 } from '../src/lib/calc';
+import { DEFAULT_POLICY, runCash, streamOf } from '../src/lib/cashflow';
 import { completeDrug, type Coverage, type Doctor, type Drug, type Insurer, type Sale, type Settings } from '../src/lib/db';
 import { buildContext, drugConsumption, forecastDoctor, mixProblem, newDoctor, totalsOf, workDaysFromWeek } from '../src/lib/doctors';
 
@@ -91,6 +92,73 @@ describe('داده‌های واقعی', () => {
     expect(forecastDoctor({ ...base(), id: 8 }, [], c).source).toBe('manual');
     const use = drugConsumption([f], c);
     expect(use[0].source).toBe('actual');
+  });
+
+  it('پزشک بدون تخمین با دو فروش واقعی: جمع byInsurer با sales و insurer برابر است و در runCash فروش ۱۰۰ میلیون می‌دهد', () => {
+    const twoMonthSales: Sale[] = [
+      { id: 1, date: '2026-08-10', rxNumber: 'r1', doctorId: 7, drugId: 1, quantity: 10, total: 100_000_000, insurerShare: 80_000_000, patientShare: 20_000_000 },
+      { id: 2, date: '2026-09-10', rxNumber: 'r2', doctorId: 7, drugId: 1, quantity: 10, total: 100_000_000, insurerShare: 80_000_000, patientShare: 20_000_000 },
+    ];
+    const c = ctx({ sales: twoMonthSales });
+
+    // ۱. پزشک بدون تخمین (rxPerDay 0، avgRxAmount 0)
+    const noEstDoc = base({ id: 7, rxPerDay: 0, avgRxAmount: 0, insurerMix: { 1: 1 } });
+    const fNoEst = forecastDoctor(noEstDoc, [], c);
+    expect(fNoEst.sales).toBeCloseTo(100_000_000);
+    expect(fNoEst.insurer).toBeCloseTo(80_000_000);
+    const sumSalesNoEst = fNoEst.byInsurer.reduce((s, r) => s + r.sales, 0);
+    const sumInsurerNoEst = fNoEst.byInsurer.reduce((s, r) => s + r.insurer, 0);
+    expect(sumSalesNoEst).toBeCloseTo(100_000_000);
+    expect(sumInsurerNoEst).toBeCloseTo(80_000_000);
+    expect(fNoEst.byInsurer[0].patient).toBeCloseTo(20_000_000);
+
+    // ۲. همان پزشک با rxPerDay 10 و avgRxAmount 5,000,000
+    const withEstDoc = base({ id: 7, rxPerDay: 10, avgRxAmount: 5_000_000, insurerMix: { 1: 1 } });
+    const fWithEst = forecastDoctor(withEstDoc, [], c);
+    const sumSalesWithEst = fWithEst.byInsurer.reduce((s, r) => s + r.sales, 0);
+    const sumInsurerWithEst = fWithEst.byInsurer.reduce((s, r) => s + r.insurer, 0);
+    expect(sumSalesWithEst).toBeCloseTo(100_000_000);
+    expect(sumInsurerWithEst).toBeCloseTo(80_000_000);
+
+    // ۳. تست نقدینگی: streamOf روی پزشک بدون تخمین در runCash فروش ماهانهٔ ۱۰۰ میلیون بدهد
+    const cashMonths = runCash({
+      startMonth: '1405-08',
+      openingCash: 0,
+      minSafe: 0,
+      policy: DEFAULT_POLICY,
+      margin: 0.18,
+      technicalFee: 0,
+      technicalFeeInsurerShare: 0,
+      streams: [streamOf(fNoEst, 7)],
+      insurers: [{ key: 1, name: 'بیمه 1', delay: 6, deduction: 0 }],
+      fixed: [],
+      oneOff: [],
+      cheques: [],
+      purchases: [],
+    });
+    expect(cashMonths[0].sales).toBeCloseTo(100_000_000);
+    expect(cashMonths[0].insurerShare).toBeCloseTo(80_000_000);
+    expect(cashMonths[0].patientShare).toBeCloseTo(20_000_000);
+  });
+
+  it('فروش واقعی دارای insurerId مستقیم بر اساس بیمهٔ هر فروش جمع زده می‌شود', () => {
+    const directSales: Sale[] = [
+      { id: 1, date: '2026-08-10', rxNumber: 'r1', doctorId: 7, insurerId: 1, drugId: 1, quantity: 5, total: 60_000_000, insurerShare: 50_000_000, patientShare: 10_000_000 },
+      { id: 2, date: '2026-08-12', rxNumber: 'r2', doctorId: 7, insurerId: 0, drugId: 1, quantity: 5, total: 40_000_000, insurerShare: 0, patientShare: 40_000_000 },
+    ];
+    const c = ctx({ sales: directSales });
+    const doc = base({ id: 7, rxPerDay: 10, avgRxAmount: 5_000_000, insurerMix: { 1: 0.8, 0: 0.2 } });
+    const f = forecastDoctor(doc, [], c);
+    const ins1 = f.byInsurer.find((r) => r.key === 1)!;
+    const free = f.byInsurer.find((r) => r.key === 0)!;
+    expect(ins1.sales).toBeCloseTo(60_000_000);
+    expect(ins1.insurer).toBeCloseTo(50_000_000);
+    expect(ins1.patient).toBeCloseTo(10_000_000);
+    expect(free.sales).toBeCloseTo(40_000_000);
+    expect(free.insurer).toBeCloseTo(0);
+    expect(free.patient).toBeCloseTo(40_000_000);
+    expect(f.byInsurer.reduce((s, r) => s + r.sales, 0)).toBeCloseTo(f.sales);
+    expect(f.byInsurer.reduce((s, r) => s + r.insurer, 0)).toBeCloseTo(f.insurer);
   });
 });
 

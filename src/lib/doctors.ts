@@ -117,23 +117,68 @@ const monthOf = (iso: string) => {
   return monthKey(y, m);
 };
 
-/** فروش واقعی یک پزشک به تفکیک ماه؛ میانگین متحرک ۳ ماه آخر جای تخمین را می‌گیرد. */
+/**
+ * فروش واقعی یک پزشک به تفکیک ماه؛ میانگین متحرک ۳ ماه آخر جای تخمین را می‌گیرد.
+ * اگر ردیف‌های فروش دارای insurerId باشند، فروش و سهم بیمهٔ هر بیمه مستقیم به تفکیک ماه جمع می‌شود؛
+ * و برای ردیف‌های فاقد insurerId، جمع کل (unassignedSales و unassignedInsurer) جداگانه نگه داشته می‌شود تا در forecastDoctor پخش شود.
+ */
 function actualFigures(sales: Sale[]) {
   if (sales.length === 0) return null;
-  const months = new Map<string, { rx: Set<string>; total: number; insurer: number }>();
+  const months = new Map<
+    string,
+    {
+      rx: Set<string>;
+      total: number;
+      insurer: number;
+      unassignedSales: number;
+      unassignedInsurer: number;
+      byInsurer: Map<number, { sales: number; insurer: number }>;
+    }
+  >();
   for (const sale of sales) {
     const key = monthOf(sale.date);
-    const month = months.get(key) ?? { rx: new Set(), total: 0, insurer: 0 };
+    const month = months.get(key) ?? {
+      rx: new Set(),
+      total: 0,
+      insurer: 0,
+      unassignedSales: 0,
+      unassignedInsurer: 0,
+      byInsurer: new Map(),
+    };
     month.rx.add(sale.rxNumber);
     month.total += sale.total;
     month.insurer += sale.insurerShare;
+    if (sale.insurerId !== undefined && sale.insurerId !== null) {
+      const part = month.byInsurer.get(sale.insurerId) ?? { sales: 0, insurer: 0 };
+      part.sales += sale.total;
+      part.insurer += sale.insurerShare;
+      month.byInsurer.set(sale.insurerId, part);
+    } else {
+      month.unassignedSales += sale.total;
+      month.unassignedInsurer += sale.insurerShare;
+    }
     months.set(key, month);
   }
   const list = [...months.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
+  const recent = list.slice(-3);
+  const insurerKeys = new Set<number>();
+  for (const m of recent) {
+    for (const k of m.byInsurer.keys()) insurerKeys.add(k);
+  }
+  const directByInsurer = new Map<number, { sales: number; insurer: number }>();
+  for (const k of insurerKeys) {
+    directByInsurer.set(k, {
+      sales: movingAverage3(list.map((m) => m.byInsurer.get(k)?.sales ?? 0)),
+      insurer: movingAverage3(list.map((m) => m.byInsurer.get(k)?.insurer ?? 0)),
+    });
+  }
   return {
     rx: movingAverage3(list.map((m) => m.rx.size)),
     sales: movingAverage3(list.map((m) => m.total)),
     insurer: movingAverage3(list.map((m) => m.insurer)),
+    unassignedSales: movingAverage3(list.map((m) => m.unassignedSales)),
+    unassignedInsurer: movingAverage3(list.map((m) => m.unassignedInsurer)),
+    directByInsurer,
   };
 }
 
@@ -221,10 +266,61 @@ export function forecastDoctor(
   let source: Source = 'manual';
   if (actual) {
     const ratio = sales > 0 ? gross / sales : ctx.defaultMargin;
-    const scale = sales > 0 ? actual.sales / sales : 0;
-    byInsurer = byInsurer.map((r) => ({
-      ...r, sales: r.sales * scale, insurer: r.insurer * scale, patient: r.patient * scale,
-    }));
+
+    // اگر در فروش‌های واقعی insurerId جدیدی وجود دارد که در ترکیب بیمهٔ پزشک نبوده، به ردیف‌ها اضافه شود
+    const existingKeys = new Set(byInsurer.map((r) => r.key));
+    for (const k of actual.directByInsurer.keys()) {
+      if (!existingKeys.has(k)) {
+        byInsurer.push({ key: k, name: nameOf(k), share: 0, sales: 0, insurer: 0, patient: 0 });
+        existingKeys.add(k);
+      }
+    }
+
+    // ۱. پخش فروش‌های واقعی فاقد insurerId: با وزن فروش تخمینی ردیف‌ها، و اگر تخمین صفر بود با وزن ترکیب بیمه (insurerMix)
+    const totalEstSales = byInsurer.reduce((s, r) => s + r.sales, 0);
+    const totalMixShare = byInsurer.reduce((s, r) => s + r.share, 0);
+    const allocatedSalesByRow = byInsurer.map((r) => {
+      const weight =
+        totalEstSales > 0 ? r.sales / totalEstSales
+        : totalMixShare > 0 ? r.share / totalMixShare
+        : byInsurer.length > 0 ? 1 / byInsurer.length
+        : 0;
+      return actual.unassignedSales * weight;
+    });
+
+    // ۲. پخش سهم بیمهٔ واقعی فاقد insurerId: فقط بین ردیف‌های بیمه‌دار (key !== FREE_KEY)
+    // ابتدا با وزن سهم بیمهٔ تخمینی هر ردیف، و اگر صفر بود با وزن sales × defaultShare هر بیمه
+    const totalEstInsurer = byInsurer.reduce((s, r) => (r.key !== FREE_KEY ? s + r.insurer : s), 0);
+    const defaultInsurerWeights = byInsurer.map((r, i) =>
+      r.key !== FREE_KEY ? allocatedSalesByRow[i] * (ctx.insurers.get(r.key)?.defaultShare ?? 0) : 0,
+    );
+    const totalDefaultWeight = defaultInsurerWeights.reduce((a, b) => a + b, 0);
+    const totalInsuredSales = byInsurer.reduce((s, r, i) => (r.key !== FREE_KEY ? s + allocatedSalesByRow[i] : s), 0);
+    const insuredCount = byInsurer.filter((r) => r.key !== FREE_KEY).length;
+
+    byInsurer = byInsurer.map((r, i) => {
+      const direct = actual.directByInsurer.get(r.key) ?? { sales: 0, insurer: 0 };
+      const allocatedSales = allocatedSalesByRow[i];
+      let allocatedInsurer = 0;
+      if (r.key !== FREE_KEY && actual.unassignedInsurer > 0) {
+        const insWeight =
+          totalEstInsurer > 0 ? r.insurer / totalEstInsurer
+          : totalDefaultWeight > 0 ? defaultInsurerWeights[i] / totalDefaultWeight
+          : totalInsuredSales > 0 ? allocatedSales / totalInsuredSales
+          : insuredCount > 0 ? 1 / insuredCount
+          : 0;
+        allocatedInsurer = actual.unassignedInsurer * insWeight;
+      }
+      const rowSales = direct.sales + allocatedSales;
+      const rowInsurer = direct.insurer + allocatedInsurer;
+      return {
+        ...r,
+        sales: rowSales,
+        insurer: rowInsurer,
+        patient: rowSales - rowInsurer,
+      };
+    });
+
     sales = actual.sales;
     insurer = actual.insurer;
     gross = sales * ratio;
