@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
+import * as XLSX from 'xlsx';
 import { lineFigures, marginHistogram, realProfit } from '../src/lib/calc';
 import { db, ensureDefaults } from '../src/lib/db';
 import { saveManualDrug } from '../src/lib/drugbank';
@@ -7,6 +8,7 @@ import {
   buildMatchIndex, deleteInvoice, draftWarnings, emptyDraft, emptyItem, latestPurchases, loadDraft, matchItem, parseInvoiceJson,
   planCheques, saveInvoice, saveProblems,
 } from '../src/lib/invoice';
+import { convertExcelBufferToInvoice } from '../src/lib/invoiceExcelImport';
 import { INVOICE_PROMPT } from '../src/lib/invoicePrompt';
 import { addJalaliMonths, parseJalaliDate } from '../src/lib/jalali';
 
@@ -232,5 +234,42 @@ describe('ذخیره و تطبیق', () => {
     expect(list).toHaveLength(1);
     expect(list[0].item.unitPrice).toBe(90000);
     expect(list[0].purchases).toBe(2);
+  });
+
+  it('تبدیل فایل اکسل با سرستون‌های متفاوت شرکت‌های پخش به فاکتور استاندارد', () => {
+    const wb = XLSX.utils.book_new();
+    const wsItems = XLSX.utils.json_to_sheet([
+      {
+        'شرح کالا': 'ژل دیکلوفناک ۶۰ گرم',
+        'مقدار': 40,
+        'اشانتیون': 10,
+        'قیمت واحد': 1944000,
+        'بهای مصرف کننده': 2217000,
+        'شماره ساخت': '1344',
+        'انقضاء': '2028/09/27',
+        'مبلغ خالص': 77760000,
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, wsItems, 'اقلام فاکتور');
+    const wsMeta = XLSX.utils.json_to_sheet([
+      { 'عنوان': 'شرکت پخش', 'مقدار': 'داروگستر طوبی' },
+      { 'عنوان': 'شماره فاکتور', 'مقدار': '3354' },
+      { 'عنوان': 'تاریخ فاکتور', 'مقدار': '1405/06/24' },
+    ]);
+    XLSX.utils.book_append_sheet(wb, wsMeta, 'مشخصات فاکتور');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+
+    const res = convertExcelBufferToInvoice(buf);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.distributor).toBe('داروگستر طوبی');
+    expect(res.draft.number).toBe('3354');
+    expect(res.draft.items).toHaveLength(1);
+    expect(res.draft.items[0].name).toBe('ژل دیکلوفناک 60 گرم');
+    expect(res.draft.items[0].qty).toBe(40);
+    expect(res.draft.items[0].bonus).toBe(10);
+    expect(res.draft.items[0].unitPrice).toBe(1944000);
+    expect(res.draft.items[0].consumerPrice).toBe(2217000);
+    expect(res.draft.items[0].batch).toBe('1344');
   });
 });

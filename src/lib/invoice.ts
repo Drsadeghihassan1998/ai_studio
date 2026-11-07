@@ -87,11 +87,16 @@ export type ParseResult = { ok: true; draft: DraftInvoice } | { ok: false; error
 
 const PAYMENT_TYPES: PaymentType[] = ['cash', 'cheque', 'mixed', 'credit'];
 
-/** بعضی هوش مصنوعی‌ها JSON را داخل ``` یا با جملهٔ اضافه می‌دهند؛ فقط بخش آکولاد برداشته می‌شود. */
+/** بعضی هوش مصنوعی‌ها JSON را داخل ``` یا با جملهٔ اضافه یا اسلش انتهای خط می‌دهند؛ فقط بخش آکولاد برداشته می‌شود. */
 function jsonPart(text: string): string {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  return start >= 0 && end > start ? text.slice(start, end + 1) : text;
+  const cleaned = text
+    .replace(/&#x20;/gi, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&quot;/gi, '"')
+    .replace(/\\\s*(\r?\n)/g, '$1');
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  return start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned;
 }
 
 export function parseInvoiceJson(text: string): ParseResult {

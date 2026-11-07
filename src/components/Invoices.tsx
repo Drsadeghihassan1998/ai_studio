@@ -8,9 +8,11 @@ import { db, type Cheque, type Distributor, type Drug, type Invoice, type Invoic
 import { fullDrugDose, fullDrugName } from '../lib/drugname';
 import { faDate, faNumber } from '../lib/format';
 import { deleteInvoice, emptyDraft, loadDraft, parseInvoiceJson, type DraftInvoice } from '../lib/invoice';
+import { convertExcelBufferToInvoice } from '../lib/invoiceExcelImport';
 import { exportDistributorArchiveToExcel, exportInvoiceToExcel } from '../lib/invoiceExport';
 import { PAYMENT_TYPE_LABELS } from '../lib/invoiceExportLabels';
 import { INVOICE_PROMPT } from '../lib/invoicePrompt';
+import { EXCEL_INVOICE_PROMPT, SMART_JSON_INVOICE_PROMPT } from '../lib/invoiceSmartPrompt';
 import { currentMonthKey, jalaliParts, monthKey } from '../lib/jalali';
 import { matches, normalizeText } from '../lib/text';
 import {
@@ -73,9 +75,11 @@ function NewInvoice({
 }) {
   const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const excelInputRef = useRef<HTMLInputElement | null>(null);
   const [files, setFiles] = useState<SelectedInvoiceFile[]>([]);
   const [extracting, setExtracting] = useState(false);
   const [text, setText] = useState('');
+  const [promptMode, setPromptMode] = useState<'excel' | 'smart_json' | 'basic'>('excel');
   const [errors, setErrors] = useState<string[]>([]);
 
   const applyDefaultDist = (draft: DraftInvoice): DraftInvoice => {
@@ -85,14 +89,47 @@ function NewInvoice({
     return draft;
   };
 
+  const activePromptText =
+    promptMode === 'excel'
+      ? EXCEL_INVOICE_PROMPT
+      : promptMode === 'smart_json'
+        ? SMART_JSON_INVOICE_PROMPT
+        : INVOICE_PROMPT;
+
+  const handleExcelSelected = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const file = fileList[0];
+    setErrors([]);
+    try {
+      const buffer = await file.arrayBuffer();
+      const converted = convertExcelBufferToInvoice(buffer);
+      if (!converted.ok) {
+        setErrors(converted.errors);
+      } else {
+        setText(converted.json);
+        toast('فایل اکسل خوانده و به فاکتور تبدیل شد؛ سطرها را بازبینی کنید');
+        onDraft(applyDefaultDist(converted.draft));
+      }
+    } catch {
+      setErrors([`امکان خواندن فایل اکسل «${file.name}» وجود نداشت.`]);
+    } finally {
+      if (excelInputRef.current) excelInputRef.current.value = '';
+    }
+  };
+
   const handleFilesSelected = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     setErrors([]);
     const added: SelectedInvoiceFile[] = [];
     for (const file of Array.from(fileList)) {
-      const mimeType = file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+      const lower = file.name.toLowerCase();
+      if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv')) {
+        await handleExcelSelected(fileList);
+        return;
+      }
+      const mimeType = file.type || (lower.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
       if (!mimeType.startsWith('image/') && mimeType !== 'application/pdf') {
-        setErrors((prev) => [...prev, `فایل «${file.name}» باید عکس یا PDF باشد.`]);
+        setErrors((prev) => [...prev, `فایل «${file.name}» باید اکسل، عکس یا PDF باشد.`]);
         continue;
       }
       try {
@@ -139,7 +176,7 @@ function NewInvoice({
       });
       const payload = (await response.json().catch(() => ({}))) as { json?: string; error?: string };
       if (!response.ok || !payload.json) {
-        setErrors([payload.error || 'استخراج خودکار انجام نشد. می‌توانید از بخش پایین متن JSON را وارد کنید یا دوباره تلاش کنید.']);
+        setErrors([payload.error || 'استخراج خودکار انجام نشد. می‌توانید از بخش پایین پرامپت را کپی و خروجی اکسل یا JSON را وارد کنید.']);
         setExtracting(false);
         return;
       }
@@ -153,7 +190,7 @@ function NewInvoice({
       }
     } catch {
       setErrors([
-        'ارتباط با سرویس استخراج خودکار برقرار نشد (احتمالاً آفلاین هستید). می‌توانید در بخش پایین پرامپت را کپی و خروجی JSON را وارد کنید.',
+        'ارتباط با سرویس استخراج خودکار برقرار نشد (احتمالاً آفلاین هستید). می‌توانید در بخش پایین پرامپت را کپی و خروجی اکسل یا JSON را وارد کنید.',
       ]);
     } finally {
       setExtracting(false);
@@ -199,27 +236,52 @@ function NewInvoice({
         </>
       }
     >
-      <div className="rounded-xl border border-line bg-app/50 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="flex items-center gap-2 font-bold text-ink">
-              <Sparkles size={18} className="text-primary" aria-hidden />
-              <span>استخراج خودکار از عکس یا PDF فاکتور</span>
-            </h3>
-            <p className="mt-1 text-note text-muted">
-              فایل PDF یا یک یا چند عکس از صفحات فاکتور شرکت پخش را انتخاب کنید تا تعداد، آفر، فی خرید، تخفیف و مالیات خودکار استخراج و برای بازبینی شما باز شود.
-            </p>
-          </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-xl border border-line bg-app/50 p-4">
+          <h3 className="flex items-center gap-2 font-bold text-ink">
+            <FileSpreadsheet size={18} className="text-primary" aria-hidden />
+            <span>۱. ورود فایل اکسل فاکتور (.xlsx)</span>
+          </h3>
+          <p className="mt-1 text-note text-muted">
+            فایل اکسل را که از هوش مصنوعی یا از سامانهٔ شرکت پخش گرفته‌اید انتخاب کنید تا خودکار به فاکتور تبدیل و برای بازبینی باز شود.
+          </p>
+          <input
+            ref={excelInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={(e) => handleExcelSelected(e.target.files)}
+          />
+          <Button
+            variant="primary"
+            className="mt-4 w-full"
+            disabled={extracting}
+            onClick={() => excelInputRef.current?.click()}
+          >
+            <FileSpreadsheet size={18} aria-hidden />
+            <span>انتخاب فایل اکسل فاکتور و تبدیل به فاکتور</span>
+          </Button>
+        </div>
+
+        <div className="rounded-xl border border-line bg-app/50 p-4">
+          <h3 className="flex items-center gap-2 font-bold text-ink">
+            <Sparkles size={18} className="text-primary" aria-hidden />
+            <span>۲. انتخاب مستقیم PDF یا عکس فاکتور</span>
+          </h3>
+          <p className="mt-1 text-note text-muted">
+            یک یا چند عکس یا PDF از صفحات فاکتور پخش انتخاب کنید تا مستقیم در برنامه خوانده شود.
+          </p>
           <input
             ref={fileInputRef}
             type="file"
-            accept="application/pdf,image/*"
+            accept="application/pdf,image/*,.xlsx,.xls,.csv"
             multiple
             className="hidden"
             onChange={(e) => handleFilesSelected(e.target.files)}
           />
           <Button
-            variant={files.length === 0 ? 'primary' : 'secondary'}
+            variant="secondary"
+            className="mt-4 w-full"
             disabled={extracting}
             onClick={() => fileInputRef.current?.click()}
           >
@@ -236,42 +298,42 @@ function NewInvoice({
             )}
           </Button>
         </div>
-
-        {files.length > 0 && (
-          <ul className="mt-4 grid gap-2">
-            {files.map((f, idx) => (
-              <li
-                key={f.id}
-                className="flex items-center justify-between gap-2 rounded-xl border border-line bg-card px-4 py-2 text-note"
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <Badge tone="good">صفحه/فایل {faNumber(idx + 1)}</Badge>
-                  <span dir="auto" className="truncate font-medium">{f.name}</span>
-                  <span className="text-muted">({f.mimeType === 'application/pdf' ? 'PDF' : 'تصویر'})</span>
-                </span>
-                <Button
-                  variant="text"
-                  disabled={extracting}
-                  className="min-h-9 px-2 text-bad"
-                  aria-label={`حذف ${f.name}`}
-                  onClick={() => removeFile(f.id)}
-                >
-                  <Trash2 size={16} aria-hidden />
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {extracting && (
-          <p className="mt-4 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary-soft/50 p-4 text-note text-primary">
-            <Loader2 size={18} className="shrink-0 animate-spin" aria-hidden />
-            <span>
-              در حال خواندن سطرهای فاکتور و تطبیق ساختار شرکت پخش... این کار بسته به تعداد اقلام چند ثانیه زمان می‌برد.
-            </span>
-          </p>
-        )}
       </div>
+
+      {files.length > 0 && (
+        <ul className="mt-4 grid gap-2">
+          {files.map((f, idx) => (
+            <li
+              key={f.id}
+              className="flex items-center justify-between gap-2 rounded-xl border border-line bg-card px-4 py-2 text-note"
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <Badge tone="good">صفحه/فایل {faNumber(idx + 1)}</Badge>
+                <span dir="auto" className="truncate font-medium">{f.name}</span>
+                <span className="text-muted">({f.mimeType === 'application/pdf' ? 'PDF' : 'تصویر'})</span>
+              </span>
+              <Button
+                variant="text"
+                disabled={extracting}
+                className="min-h-9 px-2 text-bad"
+                aria-label={`حذف ${f.name}`}
+                onClick={() => removeFile(f.id)}
+              >
+                <Trash2 size={16} aria-hidden />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {extracting && (
+        <p className="mt-4 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary-soft/50 p-4 text-note text-primary">
+          <Loader2 size={18} className="shrink-0 animate-spin" aria-hidden />
+          <span>
+            در حال خواندن سطرهای فاکتور و تطبیق ساختار شرکت پخش... این کار بسته به تعداد اقلام چند ثانیه زمان می‌برد.
+          </span>
+        </p>
+      )}
 
       {errors.length > 0 && (
         <ul className="mt-4 grid gap-1 rounded-xl border border-bad/40 bg-card p-4 text-note text-bad" role="alert">
@@ -281,37 +343,74 @@ function NewInvoice({
         </ul>
       )}
 
-      <details className="mt-6 rounded-xl border border-line bg-card p-4">
-        <summary className="cursor-pointer font-medium text-muted hover:text-ink">
-          روش جایگزین (حالت آفلاین): کپی پرامپت و چسباندن متن JSON
+      <details open className="mt-6 rounded-xl border border-line bg-card p-4">
+        <summary className="cursor-pointer font-medium text-ink">
+          ۳. پرامپت جامع هوشمند برای هوش مصنوعی (دریافت خروجی اکسل یا JSON با تشخیص سرستون‌های متفاوت پخش)
         </summary>
         <div className="mt-4">
-          <ol className="grid gap-2 text-note text-muted">
-            <li>۱. اگر بدون اینترنت کار می‌کنید، پرامپت را کپی کنید.</li>
-            <li>۲. آن را همراه PDF یا عکس فاکتور به یک هوش مصنوعی بدهید.</li>
-            <li>۳. خروجی JSON را در کادر زیر بچسبانید و «بررسی و ادامه» را بزنید.</li>
+          <ol className="grid gap-1 text-note text-muted">
+            <li>۱. یکی از دو پرامپت جامع زیر («دریافت اکسل» یا «دریافت JSON») را کپی کنید و همراه PDF/عکس فاکتور به هوش مصنوعی بدهید.</li>
+            <li>۲. در این پرامپت‌ها تمام الفاظ مترادف شرکت‌های پخش (مثلاً فی = قیمت واحد = بهای واحد = نرخ) آموزش داده شده است.</li>
+            <li>۳. اگر از هوش مصنوعی فایل اکسل گرفتید با دکمهٔ «انتخاب فایل اکسل» در بالا وارد کنید، و اگر JSON گرفتید در کادر پایین بچسبانید.</li>
           </ol>
-          <Button
-            className="mt-4"
-            onClick={async () => {
-              if (await copyText(INVOICE_PROMPT)) toast('پرامپت کپی شد');
-              else toast('کپی نشد. متن را از پایین همین صفحه بردارید.', 'error');
-            }}
-          >
-            <ClipboardCopy size={16} aria-hidden /> کپی پرامپت استخراج
-          </Button>
-          <details className="mt-2">
-            <summary className="flex min-h-11 items-center text-note text-primary">دیدن متن پرامپت</summary>
-            <pre dir="auto" className="rounded-xl bg-app p-4 text-note whitespace-pre-wrap">{INVOICE_PROMPT}</pre>
+
+          <div className="mt-4">
+            <Segmented<'excel' | 'smart_json' | 'basic'>
+              label="نوع پرامپت"
+              value={promptMode}
+              onChange={setPromptMode}
+              options={[
+                { value: 'excel', label: 'پرامپت جامع دریافت اکسل (.xlsx)' },
+                { value: 'smart_json', label: 'پرامپت جامع دریافت JSON' },
+                { value: 'basic', label: 'پرامپت کوتاه پایه' },
+              ]}
+            />
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button
+              variant="primary"
+              onClick={async () => {
+                if (await copyText(activePromptText)) {
+                  toast(
+                    promptMode === 'excel'
+                      ? 'پرامپت جامع دریافت اکسل کپی شد'
+                      : 'پرامپت جامع دریافت JSON کپی شد',
+                  );
+                } else {
+                  toast('کپی نشد. متن را از کادر زیر بردارید.', 'error');
+                }
+              }}
+            >
+              <ClipboardCopy size={16} aria-hidden />
+              <span>
+                {promptMode === 'excel'
+                  ? 'کپی پرامپت جامع (دریافت فایل اکسل از هوش مصنوعی)'
+                  : promptMode === 'smart_json'
+                    ? 'کپی پرامپت جامع (دریافت JSON از هوش مصنوعی)'
+                    : 'کپی پرامپت کوتاه پایه'}
+              </span>
+            </Button>
+          </div>
+
+          <details className="mt-3">
+            <summary className="flex min-h-11 cursor-pointer items-center text-note text-primary">
+              دیدن متن کامل پرامپت انتخاب‌شده (شامل فرهنگ لغت سرستون‌های پخش)
+            </summary>
+            <pre dir="auto" className="mt-2 max-h-72 overflow-y-auto rounded-xl bg-app p-4 text-note whitespace-pre-wrap">
+              {activePromptText}
+            </pre>
           </details>
+
           <label htmlFor="invoice-json" className="mt-4 mb-1 block text-note font-medium">
-            خروجی هوش مصنوعی (JSON)
+            خروجی هوش مصنوعی (JSON) — در صورت استفاده از اکسل، خودکار پر می‌شود
           </label>
           <textarea
             id="invoice-json"
             dir="ltr"
-            rows={8}
+            rows={7}
             spellCheck={false}
+            placeholder="اگر از هوش مصنوعی خروجی JSON گرفتید، اینجا بچسبانید و «بررسی و ادامه» را بزنید..."
             value={text}
             onChange={(e) => {
               setText(e.target.value);

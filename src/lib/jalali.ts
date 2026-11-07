@@ -15,7 +15,9 @@ export function todayISO(now = new Date()): string {
 }
 
 export function jalaliParts(iso: string) {
-  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  const [y, m, d] = String(iso ?? '').trim().slice(0, 10).split(/[-/.]/).map(Number);
+  if (!y || !m || !d) return { y: 1400, m: 1, d: 1 };
+  if (y >= 1300 && y <= 1500) return { y, m, d };
   const j = toJalaali(y, m, d);
   return { y: j.jy, m: j.jm, d: j.jd };
 }
