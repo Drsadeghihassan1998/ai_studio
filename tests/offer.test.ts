@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { earlyPayDiscount } from '../src/lib/calc';
 import {
   advantage, breakEvenRate, cashDelta, compareQuickOffers, decide, endsAfter, expiryCheck, liquidity, monthsToSell, normalPayments,
   offerCashSeries, optimize, parseOfferText, paymentOptions, present, qtyCap, revenueFlows, sensitivity, totalUnits, unitRevenue,
@@ -154,7 +155,7 @@ describe('بقیهٔ محاسبات', () => {
     expect(p2).toEqual({ buyQty: 70, freeQty: 15, chequeMonths: 5 });
 
     const p3 = parseOfferText('100+20 چک 4 ماهه تخفیف 2%');
-    expect(p3).toEqual({ buyQty: 100, freeQty: 20, chequeMonths: 4, discountPerMonth: 0.02 });
+    expect(p3).toEqual({ buyQty: 100, freeQty: 20, chequeMonths: 4, discountPerMonth: 0.02, discountAmbiguous: true });
 
     const cmp = compareQuickOffers(
       [
@@ -208,6 +209,39 @@ describe('بقیهٔ محاسبات', () => {
 
     const cmp = compareQuickOffers([offerA], ctx);
     expect(cmp.noneBeatsNormal).toBe(true);
+  });
+  it('تشخیص تخفیف کل نقدی، تخفیف ماهانه، تسویهٔ روزانه و سقف تخفیف زودپرداخت', () => {
+    const cashOffer = parseOfferText('100+20 چک 6 ماهه، نقد 12 درصد تخفیف');
+    expect(cashOffer.buyQty).toBe(100);
+    expect(cashOffer.freeQty).toBe(20);
+    expect(cashOffer.chequeMonths).toBe(6);
+    expect(cashOffer.cashDiscount).toBeCloseTo(0.12);
+    expect(cashOffer.discountPerMonth).toBeCloseTo(0.02);
+    expect(cashOffer.discountAmbiguous).toBeUndefined();
+
+    const monthlyOffer = parseOfferText('۵۰ تا بخر ۱۰ تا جایزه، ۲ درصد تخفیف ماهانه چک ۶ ماه');
+    expect(monthlyOffer.buyQty).toBe(50);
+    expect(monthlyOffer.freeQty).toBe(10);
+    expect(monthlyOffer.chequeMonths).toBe(6);
+    expect(monthlyOffer.discountPerMonth).toBeCloseTo(0.02);
+    expect(monthlyOffer.cashDiscount).toBeUndefined();
+    expect(monthlyOffer.discountAmbiguous).toBeUndefined();
+
+    const daysOffer = parseOfferText('12+2 تسویه 120 روزه');
+    expect(daysOffer.buyQty).toBe(12);
+    expect(daysOffer.freeQty).toBe(2);
+    expect(daysOffer.chequeMonths).toBe(4);
+
+    const cashWithoutCheque = parseOfferText('100+20 نقد 12 درصد تخفیف');
+    expect(cashWithoutCheque.cashDiscount).toBeCloseTo(0.12);
+    expect(cashWithoutCheque.chequeMonths).toBeUndefined();
+    expect(cashWithoutCheque.discountPerMonth).toBeUndefined();
+
+    expect(earlyPayDiscount(0.2, 6, 0)).toBe(1);
+    const highDiscOpts = paymentOptions(example({ discountPerMonth: 0.2, baseMonths: 6 }), 100);
+    for (const opt of highDiscOpts) {
+      expect(opt.paid).toBeGreaterThanOrEqual(0);
+    }
   });
 });
 

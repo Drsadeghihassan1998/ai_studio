@@ -325,14 +325,20 @@ export interface ParsedOfferText {
   freeQty?: number;
   chequeMonths?: number;
   discountPerMonth?: number;
+  /** تخفیف کل نقدی به شکل کسر (مثلاً 0.12 برای ۱۲٪ تخفیف نقدی) */
+  cashDiscount?: number;
+  /** آیا نوع تخفیف در متن مبهم بوده و ماهانه فرض شده است؟ */
+  discountAmbiguous?: boolean;
 }
 
 /**
- * استخراج خودکار تعداد خرید، تعداد آفر رایگان، مهلت چک و تخفیف از متن فارسی یا انگلیسی.
- * مثال‌ها:
- * - «100 عدد بخر و من بهت 20 عدد افر میدهم و چک هم مهلت 6 ماهه»
- * - «70 بخر 15 آفر 5 ماهه»
- * - «100+20 چک 6 ماه»
+ * استخراج خودکار تعداد خرید، تعداد آفر رایگان، مهلت چک (ماه یا روز) و تخفیف از متن فارسی یا انگلیسی.
+ * قواعد تخفیف:
+ * ۱. اگر درصد تخفیف کنار «نقد» یا «نقدی» باشد و واژه‌های ماهانه («ماهانه»، «در ماه»، «هر ماه»، «ماهی») کنارش نباشد:
+ *    تخفیف کل نقدی (cashDiscount) است و اگر chequeMonths > 0 معلوم باشد، discountPerMonth = cashDiscount ÷ chequeMonths.
+ * ۲. اگر واژه‌های ماهانه کنارش باشد، تخفیف ماهانه (discountPerMonth) است.
+ * ۳. اگر هیچ‌کدام کنارش نباشد، ماهانه فرض می‌شود و discountAmbiguous: true برمی‌گردد.
+ * ۴. «N روزه» و «N روز» با فرمول Math.round(N ÷ 30) به ماه تبدیل می‌شوند.
  */
 export function parseOfferText(raw: string): ParsedOfferText {
   const faDigits = '۰۱۲۳۴۵۶۷۸۹';
@@ -344,7 +350,7 @@ export function parseOfferText(raw: string): ParsedOfferText {
     })
     .replace(/[يى]/g, 'ی')
     .replace(/ك/g, 'ک')
-    .replace(/[,٬،]/g, '')
+    .replace(/[,٬،]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -358,23 +364,47 @@ export function parseOfferText(raw: string): ParsedOfferText {
     out.freeQty = Number(plusMatch[2]);
   }
 
-  // ۲. استخراج مهلت چک (مثلاً «چک 6 ماهه»، «مهلت 5 ماه»، «6 ماهه»، یا «نقد»)
+  // بررسی وجود درصد تخفیف در متن
+  const discMatch =
+    text.match(/تخفیف[^\d]*(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)/) ??
+    text.match(/(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)\s*تخفیف/) ??
+    text.match(/(?:نقد|نقدی)[^\d]*(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)/);
+
+  // ۲. استخراج مهلت چک بر حسب ماه یا روز (تبدیل روز به ماه: Math.round(N ÷ 30))
   const monthMatch =
     text.match(/(?:چک|مهلت|راس|رأس|تسویه|مدت)\s*(?:هم\s*)?(?:مهلت\s*)?(\d+(?:\.\d+)?)\s*ماه/) ??
     text.match(/(\d+(?:\.\d+)?)\s*ماهه/) ??
-    text.match(/(\d+(?:\.\d+)?)\s*ماه\s*(?:چک|مهلت)/);
+    text.match(/(\d+(?:\.\d+)?)\s*ماه(?:\s|$)/);
+  const dayMatch =
+    text.match(/(?:چک|مهلت|راس|رأس|تسویه|مدت)\s*(?:هم\s*)?(?:مهلت\s*)?(\d+(?:\.\d+)?)\s*روزه?/) ??
+    text.match(/(\d+(?:\.\d+)?)\s*روزه/) ??
+    text.match(/(\d+(?:\.\d+)?)\s*روز(?:\s|$)/);
+
   if (monthMatch) {
     out.chequeMonths = Math.round(Number(monthMatch[1]));
-  } else if (/(?:^|\s)(?:نقد|نقدی)(?:\s|$)/.test(text) && !/تخفیف\s*نقد/.test(text)) {
+  } else if (dayMatch) {
+    out.chequeMonths = Math.round(Number(dayMatch[1]) / 30);
+  } else if (/(?:^|\s)(?:نقد|نقدی)(?:\s|$)/.test(text) && !discMatch) {
     out.chequeMonths = 0;
   }
 
-  // ۳. استخراج تخفیف زودپرداخت (مثلاً «تخفیف 2 درصد» یا «2% تخفیف»)
-  const discMatch =
-    text.match(/تخفیف[^\d]*(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)/) ??
-    text.match(/(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)\s*تخفیف/);
+  // ۳. استخراج تخفیف زودپرداخت و تشخیص نوع آن (نقدی کل، ماهانه، یا مبهم)
   if (discMatch) {
-    out.discountPerMonth = Number(discMatch[1]) / 100;
+    const rate = Number(discMatch[1]) / 100;
+    const hasMonthly = /(?:ماهانه|در\s*ماه|هر\s*ماه|(?:^|\s)ماهی(?:\s|$|\d))/.test(text);
+    const hasCash = /(?:^|\s)(?:نقد|نقدی)(?:\s|$)/.test(text);
+
+    if (hasMonthly) {
+      out.discountPerMonth = rate;
+    } else if (hasCash) {
+      out.cashDiscount = rate;
+      if (out.chequeMonths !== undefined && out.chequeMonths > 0) {
+        out.discountPerMonth = Number((rate / out.chequeMonths).toFixed(8));
+      }
+    } else {
+      out.discountPerMonth = rate;
+      out.discountAmbiguous = true;
+    }
   }
 
   // ۴. اگر الگوی X+Y نبود، استخراج تعداد خرید و تعداد آفر از متن طبیعی
@@ -390,10 +420,10 @@ export function parseOfferText(raw: string): ParsedOfferText {
     if (buyMatch && out.buyQty === undefined) out.buyQty = Number(buyMatch[1]);
     if (freeMatch && out.freeQty === undefined) out.freeQty = Number(freeMatch[1]);
 
-    // اگر هنوز هر دو پیدا نشده‌اند و دو عدد اول جمله قبل از ماه چک آمده‌اند (مثلاً «100 به 20» یا «100 تا 20 تا»)
+    // اگر هنوز هر دو پیدا نشده‌اند و دو عدد اول جمله قبل از ماه/روز چک آمده‌اند
     if (out.buyQty === undefined || out.freeQty === undefined) {
       const cleaned = text
-        .replace(/(?:چک|مهلت|راس|رأس|تسویه|مدت)?\s*\d+(?:\.\d+)?\s*ماهه?/g, ' ')
+        .replace(/(?:چک|مهلت|راس|رأس|تسویه|مدت)?\s*\d+(?:\.\d+)?\s*(?:ماهه?|روزه?)/g, ' ')
         .replace(/\d+(?:\.\d+)?\s*(?:%|٪|درصد)/g, ' ');
       const nums = [...cleaned.matchAll(/\d+(?:\.\d+)?/g)].map((m) => Number(m[0]));
       if (nums.length >= 2) {
@@ -414,6 +444,9 @@ export interface QuickOfferRow {
   freeQty: number;
   chequeMonths: number;
   discountPerMonth: number;
+  cashDiscount?: number;
+  discountAmbiguous?: boolean;
+  needsChequeMonthsForCashDiscount?: boolean;
   priceOverride?: number;
 }
 

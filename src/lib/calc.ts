@@ -17,12 +17,13 @@ export function bonusUnits(quantity: number, everyX: number, freeY: number): num
 }
 
 /**
- * درصد تخفیف زودپرداخت. فرمول: d × (M − m)
+ * درصد تخفیف زودپرداخت. فرمول: min(1, max(0, d × max(0, M − m)))
  * M مدت چک پایه، m ماه پرداخت (صفر یعنی نقد)، d تخفیف هر ماه.
  * مثال: چک ۶ ماهه با ۲٪ در ماه، پرداخت نقد ← ۱۲٪. پرداخت بعد از M تخفیفی ندارد.
+ * خروجی به بازهٔ ۰ تا ۱ محدود می‌شود تا مبلغ پرداختی هرگز منفی نشود.
  */
 export function earlyPayDiscount(d: number, baseMonths: number, payMonth: number): number {
-  return d * Math.max(0, baseMonths - payMonth);
+  return Math.min(1, Math.max(0, d * Math.max(0, baseMonths - payMonth)));
 }
 
 /**

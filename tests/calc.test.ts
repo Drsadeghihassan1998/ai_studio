@@ -22,6 +22,12 @@ describe('خرید از شرکت پخش', () => {
     expect(effectiveUnitCost(paid, 10, 2)).toBeCloseTo(968 / 12);
     expect(effectiveUnitCost(100, 0, 0)).toBe(0);
   });
+  it('تخفیف زودپرداخت در بازهٔ ۰ تا ۱ محدود می‌شود و پرداخت منفی نمی‌شود', () => {
+    const disc = earlyPayDiscount(0.2, 6, 0);
+    expect(disc).toBe(1);
+    expect(netPaid(1000000, disc)).toBeGreaterThanOrEqual(0);
+    expect(earlyPayDiscount(-0.05, 6, 0)).toBe(0);
+  });
 });
 
 describe('سود', () => {

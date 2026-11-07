@@ -386,13 +386,25 @@ function QuickCompare({
     setRows((prev) =>
       prev.map((r) => {
         if (r.id !== id) return r;
+        const missingChequeForCash =
+          parsed.cashDiscount !== undefined && (parsed.chequeMonths === undefined || parsed.chequeMonths <= 0);
+        const nextChequeMonths =
+          parsed.chequeMonths !== undefined ? parsed.chequeMonths : missingChequeForCash ? 0 : r.chequeMonths;
         return {
           ...r,
           rawText,
           buyQty: parsed.buyQty !== undefined ? parsed.buyQty : r.buyQty,
           freeQty: parsed.freeQty !== undefined ? parsed.freeQty : r.freeQty,
-          chequeMonths: parsed.chequeMonths !== undefined ? parsed.chequeMonths : r.chequeMonths,
-          discountPerMonth: parsed.discountPerMonth !== undefined ? parsed.discountPerMonth : r.discountPerMonth,
+          chequeMonths: nextChequeMonths,
+          discountPerMonth:
+            parsed.discountPerMonth !== undefined
+              ? parsed.discountPerMonth
+              : missingChequeForCash
+                ? 0
+                : r.discountPerMonth,
+          cashDiscount: parsed.cashDiscount,
+          discountAmbiguous: parsed.discountAmbiguous,
+          needsChequeMonthsForCashDiscount: missingChequeForCash,
         };
       }),
     );
@@ -555,6 +567,16 @@ function QuickCompare({
                     onChange={(e) => handleTextChange(row.id, e.target.value)}
                     className="min-h-11 w-full rounded-xl border border-line bg-app/50 px-4 text-ink"
                   />
+                  {row.discountAmbiguous && (
+                    <p className="mt-1 text-note text-warn" role="status">
+                      تخفیف را ماهانه فرض کردم؛ اگر تخفیف کل نقدی است، اصلاح کنید.
+                    </p>
+                  )}
+                  {row.needsChequeMonthsForCashDiscount && row.cashDiscount !== undefined && (
+                    <p className="mt-1 text-note text-warn" role="alert">
+                      تخفیف کل نقدی ({faPercent(row.cashDiscount)}) تشخیص داده شد؛ لطفاً مهلت چک (ماه) را وارد کنید تا تخفیف ماهانه محاسبه شود.
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -574,14 +596,31 @@ function QuickCompare({
                     label="مهلت چک"
                     suffix="ماه"
                     value={row.chequeMonths}
-                    onChange={(chequeMonths) => updateRow(row.id, { chequeMonths: Math.round(chequeMonths) })}
+                    onChange={(chequeMonths) => {
+                      const m = Math.round(chequeMonths);
+                      if (row.needsChequeMonthsForCashDiscount && row.cashDiscount !== undefined && m > 0) {
+                        updateRow(row.id, {
+                          chequeMonths: m,
+                          discountPerMonth: Number((row.cashDiscount / m).toFixed(8)),
+                          needsChequeMonthsForCashDiscount: false,
+                        });
+                      } else {
+                        updateRow(row.id, { chequeMonths: m });
+                      }
+                    }}
                   />
                   <PercentField
                     label="تخفیف زودپرداخت"
                     value={row.discountPerMonth}
-                    onChange={(discountPerMonth) => updateRow(row.id, { discountPerMonth })}
+                    onChange={(discountPerMonth) => updateRow(row.id, { discountPerMonth, discountAmbiguous: false })}
                   />
                 </div>
+                {row.discountPerMonth * row.chequeMonths > 0.5 && (
+                  <p className="flex items-center gap-2 text-note text-warn" role="alert">
+                    <TriangleAlert size={16} className="shrink-0 text-warn" aria-hidden />
+                    <span>تخفیف کل نقد بیش از ۵۰٪ است؛ عدد را بررسی کنید.</span>
+                  </p>
+                )}
 
                 {ev && (
                   <div className="grid grid-cols-2 gap-2 rounded-xl border border-line bg-app/40 p-4 text-note sm:grid-cols-3">
@@ -886,6 +925,8 @@ export function Offers() {
   const [tab, setTab] = useState<Tab>('new');
   const [form, setForm] = useState<Form | null>(null);
   const [smartText, setSmartText] = useState('');
+  const [smartDiscountAmbiguous, setSmartDiscountAmbiguous] = useState(false);
+  const [smartPendingCashDiscount, setSmartPendingCashDiscount] = useState<number | null>(null);
   const [expiryDate, setExpiryDate] = useState<string | null>(null);
   const deferred = useDeferredValue(form);
 
@@ -978,13 +1019,23 @@ export function Offers() {
   const applySmartOfferText = (raw: string) => {
     setSmartText(raw);
     const parsed = parseOfferText(raw);
+    setSmartDiscountAmbiguous(Boolean(parsed.discountAmbiguous));
+    const missingChequeForCash =
+      parsed.cashDiscount !== undefined && (parsed.chequeMonths === undefined || parsed.chequeMonths <= 0);
+    setSmartPendingCashDiscount(missingChequeForCash ? parsed.cashDiscount! : null);
+
     const patch: Partial<Form> = {};
     if (parsed.buyQty !== undefined) {
       patch.qty = parsed.buyQty;
       patch.everyX = parsed.buyQty;
     }
     if (parsed.freeQty !== undefined) patch.freeY = parsed.freeQty;
-    if (parsed.chequeMonths !== undefined) patch.baseMonths = parsed.chequeMonths;
+    if (parsed.chequeMonths !== undefined) {
+      patch.baseMonths = parsed.chequeMonths;
+    } else if (missingChequeForCash) {
+      patch.baseMonths = 0;
+      patch.discountPerMonth = 0;
+    }
     if (parsed.discountPerMonth !== undefined) patch.discountPerMonth = parsed.discountPerMonth;
     if (Object.keys(patch).length > 0) keepNormal(patch);
   };
@@ -1101,6 +1152,16 @@ export function Offers() {
                   onChange={(e) => applySmartOfferText(e.target.value)}
                   className="min-h-11 w-full rounded-xl border border-line bg-app/50 px-4 text-ink"
                 />
+                {smartDiscountAmbiguous && (
+                  <p className="mt-1 text-note text-warn" role="status">
+                    تخفیف را ماهانه فرض کردم؛ اگر تخفیف کل نقدی است، اصلاح کنید.
+                  </p>
+                )}
+                {smartPendingCashDiscount !== null && (
+                  <p className="mt-1 text-note text-warn" role="alert">
+                    تخفیف کل نقدی ({faPercent(smartPendingCashDiscount)}) تشخیص داده شد؛ لطفاً مدت چک پایه (ماه) را وارد کنید تا تخفیف ماهانه محاسبه شود.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1111,12 +1172,41 @@ export function Offers() {
               <NumberField label="مصرف ماهانه" value={current.monthlyUse} onChange={(monthlyUse) => keepNormal({ monthlyUse })} />
               <NumberField label="آفر: به ازای هر … عدد" value={current.everyX} onChange={(everyX) => set({ everyX })} />
               <NumberField label="آفر: … عدد رایگان" value={current.freeY} onChange={(freeY) => set({ freeY })} />
-              <NumberField label="مدت چک پایه" suffix="ماه" value={current.baseMonths} onChange={(baseMonths) => keepNormal({ baseMonths: Math.round(baseMonths) })} />
-              <PercentField label="تخفیف زودپرداخت در هر ماه" value={current.discountPerMonth} onChange={(discountPerMonth) => set({ discountPerMonth })} />
+              <NumberField
+                label="مدت چک پایه"
+                suffix="ماه"
+                value={current.baseMonths}
+                onChange={(baseMonths) => {
+                  const m = Math.round(baseMonths);
+                  if (smartPendingCashDiscount !== null && m > 0) {
+                    keepNormal({
+                      baseMonths: m,
+                      discountPerMonth: Number((smartPendingCashDiscount / m).toFixed(8)),
+                    });
+                    setSmartPendingCashDiscount(null);
+                  } else {
+                    keepNormal({ baseMonths: m });
+                  }
+                }}
+              />
+              <PercentField
+                label="تخفیف زودپرداخت در هر ماه"
+                value={current.discountPerMonth}
+                onChange={(discountPerMonth) => {
+                  setSmartDiscountAmbiguous(false);
+                  set({ discountPerMonth });
+                }}
+              />
               <NumberField label="ماه تا انقضا" value={current.monthsToExpiry} onChange={(monthsToExpiry) => set({ monthsToExpiry })} />
               <NumberField label="موجودی فعلی" value={current.stock} onChange={(stock) => set({ stock })} />
               <PercentField label="هزینهٔ پول ماهانه" value={current.r} onChange={(r) => set({ r })} />
             </div>
+            {current.discountPerMonth * current.baseMonths > 0.5 && (
+              <p className="mt-2 flex items-center gap-2 text-note text-warn" role="alert">
+                <TriangleAlert size={16} className="shrink-0 text-warn" aria-hidden />
+                <span>تخفیف کل نقد بیش از ۵۰٪ است؛ عدد را بررسی کنید.</span>
+              </p>
+            )}
 
             <div className="mt-4">
               <MixEditor mix={current.mix} onChange={(mix) => set({ mix })} />
