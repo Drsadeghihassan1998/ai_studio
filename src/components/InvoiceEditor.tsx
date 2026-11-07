@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Trash2, TriangleAlert } from 'lucide-react';
+import { Download, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import { db, type Coverage, type Drug, type PaymentType } from '../lib/db';
 import { saveManualDrug } from '../lib/drugbank';
 import { drugTitle, fullDrugDose, fullDrugName, searchDrugs } from '../lib/drugname';
@@ -9,6 +9,7 @@ import {
   buildMatchIndex, draftTotal, draftWarnings, emptyItem, fillPrice, lineOf, matchItem, newKey, payableOf, planCheques,
   saveInvoice, saveProblems, suggestDrugs, type DraftCheque, type DraftInvoice, type DraftItem, type MatchIndex,
 } from '../lib/invoice';
+import { exportDraftInvoiceToExcel } from '../lib/invoiceExport';
 import { matchKey, normalizeText } from '../lib/text';
 import { Badge, Button, Card, CardTitle, PageHeader, PageSkeleton, Segmented } from './ui/basics';
 import { DateField, MoneyField, NumberField, PercentField, TextField } from './ui/fields';
@@ -346,9 +347,18 @@ export function InvoiceEditor({
         title={draft.id ? 'ویرایش فاکتور' : 'فاکتور جدید'}
         note="سطرها را بررسی و اصلاح کنید، بعد ذخیره کنید."
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="text" onClick={onClose}>
               انصراف
+            </Button>
+            <Button
+              onClick={() => {
+                exportDraftInvoiceToExcel(draft, drugMap);
+                toast('فایل اکسل فاکتور دانلود شد');
+              }}
+            >
+              <Download size={16} aria-hidden />
+              <span>خروجی اکسل</span>
             </Button>
             <Button variant="primary" disabled={busy || problems.length > 0} onClick={save}>
               ذخیرهٔ فاکتور

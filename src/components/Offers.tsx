@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { BadgePercent, TriangleAlert } from 'lucide-react';
+import { Award, BadgePercent, Plus, Sparkles, Trash2, TriangleAlert } from 'lucide-react';
 import { db, type Distributor, type Drug, type Offer } from '../lib/db';
 import { drugConsumption, forecastDoctor, FREE_KEY } from '../lib/doctors';
 import { insurerColumn } from '../lib/drugbank';
@@ -8,8 +8,9 @@ import { faDate, faNumber, faPercent, fullMoney } from '../lib/format';
 import { latestPurchases } from '../lib/invoice';
 import { currentMonthKey, jalaliParts, monthLabel, parseJalaliDate, todayISO } from '../lib/jalali';
 import {
-  advantage, decide, expiryCheck, liquidity, monthsToSell, offerCashSeries, paymentOptions, paymentPhrase, presentProfit, sensitivity,
-  totalUnits, verdictText, type CashContext, type MixRow, type OfferInput,
+  advantage, compareQuickOffers, decide, expiryCheck, liquidity, monthsToSell, offerCashSeries, parseOfferText,
+  paymentOptions, paymentPhrase, presentProfit, sensitivity, totalUnits, verdictText,
+  type CashContext, type MixRow, type OfferInput, type QuickCompareContext, type QuickOfferRow,
 } from '../lib/offer';
 import { drugTitle, fullDrugDose, fullDrugName, searchDrugs } from '../lib/drugname';
 import { normalizeText } from '../lib/text';
@@ -22,7 +23,7 @@ import { useToast } from './ui/Toast';
 import { LinesChart, SERIES } from './Charts';
 import { useSettings, useUnit } from './SettingsContext';
 
-type Tab = 'new' | 'compare';
+type Tab = 'new' | 'quick' | 'compare';
 
 interface Form extends OfferInput {
   title: string;
@@ -329,14 +330,443 @@ function Results({ form, cash, onSave }: { form: Form; cash: CashContext; onSave
   );
 }
 
+function QuickCompare({
+  drugs,
+  defaultRate,
+  onResolveDrugDefaults,
+  onSendToFull,
+}: {
+  drugs: Drug[];
+  defaultRate: number;
+  onResolveDrugDefaults: (drug: Drug) => { monthlyUse: number; price: number; stock: number };
+  onSendToFull: (row: QuickOfferRow, ctx: QuickCompareContext, drug: Drug | null) => void;
+}) {
+  const unit = useUnit();
+  const money = (rial: number) => fullMoney(Math.round(rial), unit);
+  const [selectedDrug, setSelectedDrug] = useState<Drug | null>(null);
+  const [ctx, setCtx] = useState<QuickCompareContext>({
+    monthlyUse: 30,
+    unitPrice: 0,
+    r: defaultRate,
+    normalMonths: 3,
+    monthsToExpiry: 18,
+    safetyMonths: 2,
+    stock: 0,
+  });
+
+  const [rows, setRows] = useState<QuickOfferRow[]>([
+    {
+      id: '1',
+      title: 'پیشنهاد شرکت اول',
+      rawText: '100 عدد بخر 20 عدد آفر چک 6 ماهه',
+      buyQty: 100,
+      freeQty: 20,
+      chequeMonths: 6,
+      discountPerMonth: 0,
+    },
+    {
+      id: '2',
+      title: 'پیشنهاد شرکت دوم',
+      rawText: '70 عدد بخر 15 عدد آفر چک 5 ماهه',
+      buyQty: 70,
+      freeQty: 15,
+      chequeMonths: 5,
+      discountPerMonth: 0,
+    },
+  ]);
+
+  const setCtxPatch = (patch: Partial<QuickCompareContext>) => setCtx((prev) => ({ ...prev, ...patch }));
+
+  const updateRow = (id: string, patch: Partial<QuickOfferRow>) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  };
+
+  const handleTextChange = (id: string, rawText: string) => {
+    const parsed = parseOfferText(rawText);
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== id) return r;
+        return {
+          ...r,
+          rawText,
+          buyQty: parsed.buyQty !== undefined ? parsed.buyQty : r.buyQty,
+          freeQty: parsed.freeQty !== undefined ? parsed.freeQty : r.freeQty,
+          chequeMonths: parsed.chequeMonths !== undefined ? parsed.chequeMonths : r.chequeMonths,
+          discountPerMonth: parsed.discountPerMonth !== undefined ? parsed.discountPerMonth : r.discountPerMonth,
+        };
+      }),
+    );
+  };
+
+  const addRow = () => {
+    const nextNum = rows.length + 1;
+    setRows((prev) => [
+      ...prev,
+      {
+        id: String(Date.now() + nextNum),
+        title: `پیشنهاد شرکت ${faNumber(nextNum)}`,
+        rawText: '',
+        buyQty: 50,
+        freeQty: 10,
+        chequeMonths: 4,
+        discountPerMonth: 0,
+      },
+    ]);
+  };
+
+  const removeRow = (id: string) => {
+    if (rows.length <= 2) return;
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const { evaluations, winner, runnerUp } = useMemo(() => compareQuickOffers(rows, ctx), [rows, ctx]);
+  const hasRealPrice = ctx.unitPrice > 0;
+
+  return (
+    <div className="grid grid-cols-1 gap-4">
+      <Card>
+        <CardTitle note="برای مقایسهٔ سریع چند آفر، مصرف ماهانهٔ دارو را وارد کنید. انتخاب دارو و قیمت واحد اختیاری است.">
+          شرایط مشترک دارو و داروخانه
+        </CardTitle>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <DrugPicker
+              drugs={drugs}
+              onPick={(d) => {
+                setSelectedDrug(d);
+                const defaults = onResolveDrugDefaults(d);
+                setCtx((prev) => ({
+                  ...prev,
+                  monthlyUse: defaults.monthlyUse > 0 ? defaults.monthlyUse : prev.monthlyUse,
+                  unitPrice: defaults.price > 0 ? defaults.price : d.price || prev.unitPrice,
+                  stock: defaults.stock,
+                }));
+              }}
+            />
+            {selectedDrug && (
+              <p className="mt-2 flex flex-wrap items-center gap-2 text-note">
+                <Badge tone="good">داروی انتخاب‌شده</Badge>
+                <span dir="auto" className="font-medium">{drugTitle(selectedDrug)}</span>
+                <Button variant="text" className="min-h-9 px-2" onClick={() => setSelectedDrug(null)}>
+                  حذف انتخاب دارو
+                </Button>
+              </p>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <NumberField
+              label="مصرف ماهانهٔ دارو"
+              suffix="عدد"
+              value={ctx.monthlyUse}
+              onChange={(monthlyUse) => setCtxPatch({ monthlyUse })}
+            />
+            <MoneyField
+              label="قیمت خرید واحد (اختیاری)"
+              value={ctx.unitPrice}
+              onChange={(unitPrice) => setCtxPatch({ unitPrice })}
+            />
+            <PercentField
+              label="هزینهٔ پول ماهانه"
+              value={ctx.r}
+              onChange={(r) => setCtxPatch({ r })}
+            />
+          </div>
+        </div>
+        <div className="mt-4">
+          <MoreSettings>
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+              <NumberField
+                label="مدت چک خرید عادی (مبنا)"
+                suffix="ماه"
+                value={ctx.normalMonths}
+                onChange={(normalMonths) => setCtxPatch({ normalMonths: Math.round(normalMonths) })}
+              />
+              <NumberField
+                label="ماه تا انقضا"
+                suffix="ماه"
+                value={ctx.monthsToExpiry}
+                onChange={(monthsToExpiry) => setCtxPatch({ monthsToExpiry })}
+              />
+              <NumberField
+                label="موجودی فعلی"
+                suffix="عدد"
+                value={ctx.stock}
+                onChange={(stock) => setCtxPatch({ stock })}
+              />
+            </div>
+          </MoreSettings>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {rows.map((row, idx) => {
+          const ev = evaluations.find((e) => e.id === row.id);
+          const isWinner = winner && winner.id === row.id && evaluations.length > 1;
+          return (
+            <Card key={row.id} className={isWinner ? 'border-good' : ''}>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-cardtitle font-bold">پیشنهاد {faNumber(idx + 1)}</span>
+                  {isWinner && <Badge tone="good">بهترین پیشنهاد</Badge>}
+                  {ev?.expiryRisky && <Badge tone="bad">خطر انقضا</Badge>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="text"
+                    className="min-h-9 px-2 text-note"
+                    onClick={() => onSendToFull(row, ctx, selectedDrug)}
+                  >
+                    بررسی کامل در فرم اصلی
+                  </Button>
+                  {rows.length > 2 && (
+                    <Button
+                      variant="text"
+                      className="min-h-9 px-2 text-bad"
+                      aria-label={`حذف ${row.title}`}
+                      onClick={() => removeRow(row.id)}
+                    >
+                      <Trash2 size={16} aria-hidden />
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid gap-4">
+                <TextField
+                  label="عنوان یا نام شرکت پخش"
+                  value={row.title}
+                  onChange={(e) => updateRow(row.id, { title: e.target.value })}
+                />
+
+                <div>
+                  <label htmlFor={`smart-offer-${row.id}`} className="mb-1 flex items-center gap-2 text-note font-medium">
+                    <Sparkles size={15} className="text-primary" aria-hidden />
+                    <span>ورود متنی هوشمند آفر (بنویسید تا کادرهای عدد خودکار پر شوند)</span>
+                  </label>
+                  <input
+                    id={`smart-offer-${row.id}`}
+                    type="text"
+                    dir="auto"
+                    placeholder="مثلاً: 100 عدد بخر 20 عدد آفر چک 6 ماهه (یا 100+20 چک 6 ماه)"
+                    value={row.rawText}
+                    onChange={(e) => handleTextChange(row.id, e.target.value)}
+                    className="min-h-11 w-full rounded-xl border border-line bg-app/50 px-4 text-ink"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                  <NumberField
+                    label="تعداد خرید"
+                    suffix="عدد"
+                    value={row.buyQty}
+                    onChange={(buyQty) => updateRow(row.id, { buyQty })}
+                  />
+                  <NumberField
+                    label="تعداد آفر رایگان"
+                    suffix="عدد"
+                    value={row.freeQty}
+                    onChange={(freeQty) => updateRow(row.id, { freeQty })}
+                  />
+                  <NumberField
+                    label="مهلت چک"
+                    suffix="ماه"
+                    value={row.chequeMonths}
+                    onChange={(chequeMonths) => updateRow(row.id, { chequeMonths: Math.round(chequeMonths) })}
+                  />
+                  <PercentField
+                    label="تخفیف زودپرداخت"
+                    value={row.discountPerMonth}
+                    onChange={(discountPerMonth) => updateRow(row.id, { discountPerMonth })}
+                  />
+                </div>
+
+                {ev && (
+                  <div className="grid grid-cols-2 gap-2 rounded-xl border border-line bg-app/40 p-4 text-note sm:grid-cols-3">
+                    <div>
+                      <span className="block text-muted">کل دریافتی</span>
+                      <span className="font-bold text-ink">{faNumber(ev.totalQty)} عدد</span>
+                    </div>
+                    <div>
+                      <span className="block text-muted">تخفیف کالایی (بونوس)</span>
+                      <span className="font-bold text-ink">{faPercent(ev.bonusDiscountRate)}</span>
+                    </div>
+                    <div>
+                      <span className="block text-muted">تخفیف واقعی امروز (با چک)</span>
+                      <span className="font-bold text-primary">{faPercent(ev.realDiscountRate)}</span>
+                    </div>
+                    {ctx.monthlyUse > 0 && (
+                      <div className="col-span-2 sm:col-span-3">
+                        <span className="text-muted">زمان فروش کل بار: </span>
+                        <span className="font-medium text-ink">{faNumber(ev.monthsToSell, 1)} ماه</span>
+                        <span className="ms-2">
+                          {ev.expiryRisky ? (
+                            <Badge tone="bad">بیشتر از مهلت امن انقضا ({faNumber(ev.unsoldQty)} عدد در خطر انقضا)</Badge>
+                          ) : ev.sellsBeforeCheque ? (
+                            <Badge tone="good">قبل از سررسید چک کامل فروش می‌رود</Badge>
+                          ) : (
+                            <Badge tone="warn">فروش بار از سررسید چک ({faNumber(ev.chequeMonths)} ماه) طولانی‌تر است</Badge>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+
+      <div>
+        <Button onClick={addRow}>
+          <Plus size={18} aria-hidden />
+          <span>افزودن پیشنهاد شرکت دیگر</span>
+        </Button>
+      </div>
+
+      {winner && evaluations.length >= 2 && (
+        <Card className="border-good">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Award size={22} className="text-good" aria-hidden />
+              <p className="text-key font-bold">برندهٔ مقایسه: {winner.title}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge tone="good">تخفیف واقعی امروز: {faPercent(winner.realDiscountRate)}</Badge>
+              <HowCalculated
+                title="نحوهٔ انتخاب بهترین پیشنهاد"
+                formula="ارزش امروز پرداخت هر واحد = [تعداد خرید ÷ (تعداد خرید + آفر)] ÷ (۱ + هزینهٔ پول)^ماه چک"
+                inputs={[
+                  ['پیشنهاد برنده', `${winner.title} (${faNumber(winner.buyQty)} + ${faNumber(winner.freeQty)}، چک ${faNumber(winner.chequeMonths)} ماهه)`],
+                  ['تخفیف کالایی (فقط بونوس)', faPercent(winner.bonusDiscountRate)],
+                  ['هزینهٔ پول ماهانه', faPercent(ctx.r)],
+                  ['تخفیف واقعی امروز با مهلت چک', faPercent(winner.realDiscountRate)],
+                ]}
+                result={['برنده', winner.title]}
+              />
+            </div>
+          </div>
+
+          <ul className="mt-4 grid gap-2 text-body">
+            <li>
+              ۱. با احتساب <strong>{faNumber(winner.freeQty)} عدد آفر رایگان</strong> در ازای خرید {faNumber(winner.buyQty)} عدد (تخفیف کالایی <strong>{faPercent(winner.bonusDiscountRate)}</strong>) و <strong>چک {faNumber(winner.chequeMonths)} ماهه</strong> (با هزینهٔ پول {faPercent(ctx.r)} در ماه)، قیمت تمام‌شدهٔ واقعی هر واحد به پول امروز <strong>{faPercent(winner.realDiscountRate)} کمتر از قیمت پایه</strong> است.
+            </li>
+            {runnerUp && (
+              <li>
+                ۲. در مقایسه با <strong>{runnerUp.title}</strong> (تخفیف کالایی {faPercent(runnerUp.bonusDiscountRate)} و تخفیف واقعی امروز {faPercent(runnerUp.realDiscountRate)})،
+                {winner.bonusDiscountRate < runnerUp.bonusDiscountRate ? (
+                  <span>
+                    {' '}گرچه درصد بونوسِ <strong>{runnerUp.title}</strong> کمی بیشتر است، اما به دلیل <strong>مهلت چک بهتر در {winner.title}</strong>، ارزش امروز هر واحد در <strong>{winner.title}</strong> به میزان <strong>{faPercent(winner.realDiscountRate - runnerUp.realDiscountRate)}</strong> به‌صرفه‌تر تمام می‌شود.
+                  </span>
+                ) : (
+                  <span>
+                    {' '}<strong>{winner.title}</strong> به اندازهٔ <strong>{faPercent(winner.realDiscountRate - runnerUp.realDiscountRate)}</strong> روی هر واحد به نفع داروخانه است
+                    {hasRealPrice ? ` (${money(runnerUp.presentUnitCost - winner.presentUnitCost)} ارزان‌تر روی هر واحد به ارزش امروز)` : ''}.
+                  </span>
+                )}
+              </li>
+            )}
+            {ctx.monthlyUse > 0 && (
+              <li>
+                ۳. با مصرف ماهانهٔ <strong>{faNumber(ctx.monthlyUse)} عدد</strong>، کل بارِ <strong>{faNumber(winner.totalQty)} عددی</strong> این پیشنهاد در <strong>{faNumber(winner.monthsToSell, 1)} ماه</strong> فروش می‌رود
+                {winner.sellsBeforeCheque
+                  ? ` که قبل از سررسید چک ${faNumber(winner.chequeMonths)} ماهه کاملاً نقد و فروخته می‌شود.`
+                  : `؛ توجه کنید که فروش کل بار حدود ${faNumber(winner.monthsToSell - winner.chequeMonths, 1)} ماه بیشتر از مهلت چک طول می‌کشد.`}
+              </li>
+            )}
+          </ul>
+        </Card>
+      )}
+
+      {evaluations.length > 0 && (
+        <Card flush>
+          <div className="px-6 pt-6">
+            <CardTitle note={hasRealPrice ? 'مبالغ بر اساس قیمت واحد واردشده محاسبه شده‌اند.' : 'قیمت واحد وارد نشده؛ ستون‌های مبلغ بر پایهٔ فرضی ۱۰۰٬۰۰۰ ریال برای مقایسهٔ نسبی هستند.'}>
+              جدول مقایسهٔ شانه به شانهٔ پیشنهادها
+            </CardTitle>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-y border-line text-note text-muted">
+                  {[
+                    'پیشنهاد',
+                    'خرید + آفر (کل)',
+                    'مهلت چک',
+                    'تخفیف کالایی (بونوس)',
+                    'تخفیف واقعی امروز',
+                    'قیمت تمام‌شدهٔ اسمی واحد',
+                    'قیمت واحد به ارزش امروز',
+                    'زمان فروش کل بار',
+                    'مزیت کل نسبت به خرید عادی',
+                  ].map((h) => (
+                    <th key={h} scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {evaluations.map((ev) => {
+                  const isWin = winner && winner.id === ev.id && evaluations.length > 1;
+                  return (
+                    <tr key={ev.id} className={`border-b border-line last:border-0 ${isWin ? 'bg-app font-medium' : ''}`}>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        <span className="inline-flex items-center gap-2">
+                          <span>{ev.title}</span>
+                          {isWin && <Badge tone="good">برنده</Badge>}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        {faNumber(ev.buyQty)} + {faNumber(ev.freeQty)} ({faNumber(ev.totalQty)} عدد)
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        {ev.chequeMonths === 0 ? 'نقد' : `${faNumber(ev.chequeMonths)} ماهه`}
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap">{faPercent(ev.bonusDiscountRate)}</td>
+                      <td className="px-4 py-2 whitespace-nowrap font-bold text-primary">{faPercent(ev.realDiscountRate)}</td>
+                      <td className="px-4 py-2 whitespace-nowrap"><Money rial={ev.nominalUnitCost} exact /></td>
+                      <td className="px-4 py-2 whitespace-nowrap"><Money rial={ev.presentUnitCost} exact /></td>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        {ctx.monthlyUse > 0 ? `${faNumber(ev.monthsToSell, 1)} ماه` : '—'}
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        <Money rial={ev.totalAdvantage} exact />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function Compare({ offers, onOpen }: { offers: Offer[]; onOpen: (offer: Offer) => void }) {
   const toast = useToast();
   if (offers.length === 0) return <EmptyState icon={BadgePercent} text="هنوز ارزیابی‌ای ذخیره نشده است. یک آفر را بررسی و ذخیره کنید." />;
+
+  // پیدا کردن بهترین آفر ذخیره‌شده بر اساس بیشترین مزیت مثبت
+  const bestOfferId = useMemo(() => {
+    let bestId: number | null = null;
+    let bestAdv = -Infinity;
+    for (const o of offers) {
+      const r = o.result as SavedResult;
+      if (r.tone !== 'bad' && r.advantage > bestAdv) {
+        bestAdv = r.advantage;
+        bestId = o.id;
+      }
+    }
+    return offers.length > 1 ? bestId : null;
+  }, [offers]);
+
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {offers.map((offer) => {
         const result = offer.result as SavedResult;
         const input = offer.input as Form;
+        const isBest = bestOfferId !== null && offer.id === bestOfferId;
         const rows: [string, React.ReactNode][] = [
           ['تعداد', `${faNumber(result.qty)} عدد`],
           ['ماه پرداخت', result.month === 0 ? 'نقد' : `ماه ${faNumber(result.month)}`],
@@ -346,8 +776,11 @@ function Compare({ offers, onOpen }: { offers: Offer[]; onOpen: (offer: Offer) =
           ['هزینهٔ پول', faPercent(input.r)],
         ];
         return (
-          <Card key={offer.id}>
-            <h2 dir="auto" className="text-cardtitle font-medium">{offer.title}</h2>
+          <Card key={offer.id} className={isBest ? 'border-good' : ''}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 dir="auto" className="text-cardtitle font-medium">{offer.title}</h2>
+              {isBest && <Badge tone="good">بهترین پیشنهاد ذخیره‌شده</Badge>}
+            </div>
             <p className="text-note text-muted">{faDate(offer.createdAt.slice(0, 10))}</p>
             <p className="my-2"><Badge tone={result.tone}>{result.verdict}</Badge></p>
             <dl>
@@ -385,6 +818,7 @@ export function Offers() {
   const lots = useLiveQuery(() => db.inventoryLots.toArray()) ?? [];
   const [tab, setTab] = useState<Tab>('new');
   const [form, setForm] = useState<Form | null>(null);
+  const [smartText, setSmartText] = useState('');
   const [expiryDate, setExpiryDate] = useState<string | null>(null);
   const deferred = useDeferredValue(form);
 
@@ -414,6 +848,16 @@ export function Offers() {
     if (patch.baseMonths !== undefined && current.normalMonths === current.baseMonths) next.normalMonths = patch.baseMonths;
     if (patch.monthlyUse !== undefined && current.normalQty === current.monthlyUse) next.normalQty = patch.monthlyUse;
     setForm(next);
+  };
+
+  const resolveDrugDefaults = (drug: Drug) => {
+    const forecasts = data.doctors
+      .filter((d) => d.active)
+      .map((d) => forecastDoctor(d, data.profiles.filter((p) => p.doctorId === d.id), ctx));
+    const monthlyUse = drugConsumption(forecasts, ctx).find((u) => u.drug.id === drug.id)?.use ?? 0;
+    const latest = latestPurchases(data.items, data.invoices, data.distributors).find((p) => p.item.drugId === drug.id);
+    const stock = lots.filter((l) => l.drugId === drug.id).reduce((s, l) => s + l.remaining, 0);
+    return { monthlyUse, price: latest?.item.unitPrice ?? 0, stock };
   };
 
   const pickDrug = (drug: Drug) => {
@@ -464,6 +908,20 @@ export function Offers() {
     });
   };
 
+  const applySmartOfferText = (raw: string) => {
+    setSmartText(raw);
+    const parsed = parseOfferText(raw);
+    const patch: Partial<Form> = {};
+    if (parsed.buyQty !== undefined) {
+      patch.qty = parsed.buyQty;
+      patch.everyX = parsed.buyQty;
+    }
+    if (parsed.freeQty !== undefined) patch.freeY = parsed.freeQty;
+    if (parsed.chequeMonths !== undefined) patch.baseMonths = parsed.chequeMonths;
+    if (parsed.discountPerMonth !== undefined) patch.discountPerMonth = parsed.discountPerMonth;
+    if (Object.keys(patch).length > 0) keepNormal(patch);
+  };
+
   const mixOk = Math.abs(current.mix.reduce((s, r) => s + r.share, 0) - 1) < 0.0001;
   const ready = deferred && deferred.price > 0 && deferred.consumerPrice > 0 && deferred.qty > 0 && deferred.monthlyUse > 0
     && Math.abs(deferred.mix.reduce((s, r) => s + r.share, 0) - 1) < 0.0001;
@@ -492,11 +950,49 @@ export function Offers() {
           value={tab}
           onChange={setTab}
           options={[
-            { value: 'new', label: 'ارزیابی' },
-            { value: 'compare', label: `مقایسهٔ آفرها (${faNumber(offers.length)})` },
+            { value: 'new', label: 'ارزیابی کامل' },
+            { value: 'quick', label: 'مقایسهٔ سریع پیشنهادها' },
+            { value: 'compare', label: `آفرهای ذخیره‌شده (${faNumber(offers.length)})` },
           ]}
         />
       </div>
+
+      {tab === 'quick' && (
+        <QuickCompare
+          drugs={data.drugs}
+          defaultRate={settings.monthlyRate}
+          onResolveDrugDefaults={resolveDrugDefaults}
+          onSendToFull={(row, qCtx, drug) => {
+            if (drug) {
+              pickDrug(drug);
+            }
+            setForm((prev) => {
+              const base = prev ?? current;
+              const price = qCtx.unitPrice > 0 ? qCtx.unitPrice : base.price;
+              return {
+                ...base,
+                title: drug ? `${drugTitle(drug)} — ${row.title}` : row.title,
+                drugId: drug ? drug.id : base.drugId,
+                price,
+                normalPrice: price,
+                consumerPrice: drug ? drug.price : base.consumerPrice || price,
+                qty: row.buyQty,
+                everyX: row.buyQty,
+                freeY: row.freeQty,
+                baseMonths: row.chequeMonths,
+                normalMonths: qCtx.normalMonths,
+                discountPerMonth: row.discountPerMonth,
+                monthlyUse: qCtx.monthlyUse || base.monthlyUse,
+                normalQty: qCtx.monthlyUse || base.normalQty,
+                monthsToExpiry: qCtx.monthsToExpiry,
+                stock: qCtx.stock,
+                r: qCtx.r,
+              };
+            });
+            setTab('new');
+          }}
+        />
+      )}
 
       {tab === 'compare' && (
         <Compare
@@ -524,6 +1020,21 @@ export function Offers() {
                 )}
               </Field>
               <TextField label="عنوان ارزیابی" dir="auto" value={current.title} onChange={(e) => set({ title: e.target.value })} />
+              <div>
+                <label htmlFor="offer-smart-text" className="mb-1 flex items-center gap-2 text-note font-medium">
+                  <Sparkles size={15} className="text-primary" aria-hidden />
+                  <span>ورود متنی هوشمند آفر (اختیاری)</span>
+                </label>
+                <input
+                  id="offer-smart-text"
+                  type="text"
+                  dir="auto"
+                  placeholder="مثلاً: 100 عدد بخر 20 عدد آفر چک 6 ماهه"
+                  value={smartText}
+                  onChange={(e) => applySmartOfferText(e.target.value)}
+                  className="min-h-11 w-full rounded-xl border border-line bg-app/50 px-4 text-ink"
+                />
+              </div>
             </div>
 
             <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -581,3 +1092,4 @@ export function Offers() {
     </>
   );
 }
+

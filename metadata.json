@@ -1,0 +1,8 @@
+{
+  "name": "مدیریت مالی داروخانه",
+  "description": "نرم‌افزار جامع مدیریت مالی، بانک دارو، فاکتورهای خرید، پیش‌بینی فروش پزشکان، نقدینگی و ارزیاب آفر داروخانه",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

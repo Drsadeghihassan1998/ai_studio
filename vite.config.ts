@@ -9,6 +9,6 @@ export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss(), viteSingleFile()],
   build: { assetsInlineLimit: 100_000_000, chunkSizeWarningLimit: 10_000 },
-  server: { port: 5183, strictPort: true },
+  server: { port: 3000, hmr: false },
   test: { environment: 'node', include: ['tests/**/*.test.ts'] },
 });

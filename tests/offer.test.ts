@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  advantage, breakEvenRate, cashDelta, decide, endsAfter, expiryCheck, liquidity, monthsToSell, normalPayments, offerCashSeries,
-  optimize, paymentOptions, present, qtyCap, revenueFlows, sensitivity, totalUnits, unitRevenue, verdictText,
-  type CashContext, type OfferInput,
+  advantage, breakEvenRate, cashDelta, compareQuickOffers, decide, endsAfter, expiryCheck, liquidity, monthsToSell, normalPayments,
+  offerCashSeries, optimize, parseOfferText, paymentOptions, present, qtyCap, revenueFlows, sensitivity, totalUnits, unitRevenue,
+  verdictText, type CashContext, type OfferInput,
 } from '../src/lib/offer';
 
 const example = (over: Partial<OfferInput> = {}): OfferInput => ({
@@ -146,4 +146,29 @@ describe('بقیهٔ محاسبات', () => {
     expect(offer).toHaveLength(base.length);
     expect(offer.at(-1)! - base.at(-1)!).toBeCloseTo(9840000 - 7216000);
   });
+  it('تشخیص هوشمند متن آفر و مقایسهٔ سریع دو شرکت پخش', () => {
+    const p1 = parseOfferText('100 عدد بخر و من بهت 20 عدد افر میدهم و چک هم مهلت 6 ماهه میدهم');
+    expect(p1).toEqual({ buyQty: 100, freeQty: 20, chequeMonths: 6 });
+
+    const p2 = parseOfferText('۷۰ عدد بخر و ۱۵ عدد بهت آفر میدهم و مهلت هم ۵ ماهه باشد');
+    expect(p2).toEqual({ buyQty: 70, freeQty: 15, chequeMonths: 5 });
+
+    const p3 = parseOfferText('100+20 چک 4 ماهه تخفیف 2%');
+    expect(p3).toEqual({ buyQty: 100, freeQty: 20, chequeMonths: 4, discountPerMonth: 0.02 });
+
+    const cmp = compareQuickOffers(
+      [
+        { id: '1', title: 'پخش اول', rawText: '', buyQty: 100, freeQty: 20, chequeMonths: 6, discountPerMonth: 0 },
+        { id: '2', title: 'پخش دوم', rawText: '', buyQty: 70, freeQty: 15, chequeMonths: 5, discountPerMonth: 0 },
+      ],
+      { monthlyUse: 30, unitPrice: 100000, r: 0.03, normalMonths: 3, monthsToExpiry: 18, safetyMonths: 2, stock: 0 },
+    );
+
+    expect(cmp.winner?.id).toBe('1');
+    expect(cmp.winner?.bonusDiscountRate).toBeCloseTo(20 / 120, 4);
+    expect(cmp.runnerUp?.bonusDiscountRate).toBeCloseTo(15 / 85, 4);
+    expect(cmp.winner!.realDiscountRate).toBeGreaterThan(cmp.runnerUp!.realDiscountRate);
+    expect(cmp.winner?.monthsToSell).toBeCloseTo(4, 2);
+  });
 });
+

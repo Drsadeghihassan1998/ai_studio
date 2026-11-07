@@ -318,3 +318,274 @@ export function offerCashSeries(i: OfferInput, qty: number, month: number) {
   const last = Math.max(...offer.map((f) => f.month), ...base.map((f) => f.month), 1);
   return { offer: cumulative(offer, last), base: cumulative(base, last) };
 }
+
+/** خروجی استخراج هوشمند از متن آفر (مثلاً «۱۰۰ عدد بخر ۲۰ عدد آفر چک ۶ ماهه») */
+export interface ParsedOfferText {
+  buyQty?: number;
+  freeQty?: number;
+  chequeMonths?: number;
+  discountPerMonth?: number;
+}
+
+/**
+ * استخراج خودکار تعداد خرید، تعداد آفر رایگان، مهلت چک و تخفیف از متن فارسی یا انگلیسی.
+ * مثال‌ها:
+ * - «100 عدد بخر و من بهت 20 عدد افر میدهم و چک هم مهلت 6 ماهه»
+ * - «70 بخر 15 آفر 5 ماهه»
+ * - «100+20 چک 6 ماه»
+ */
+export function parseOfferText(raw: string): ParsedOfferText {
+  const faDigits = '۰۱۲۳۴۵۶۷۸۹';
+  const arDigits = '٠١٢٣٤٥٦٧٨٩';
+  const text = String(raw ?? '')
+    .replace(/[۰-۹٠-٩]/g, (d) => {
+      const f = faDigits.indexOf(d);
+      return String(f >= 0 ? f : arDigits.indexOf(d));
+    })
+    .replace(/[يى]/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/[,٬،]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) return {};
+  const out: ParsedOfferText = {};
+
+  // ۱. الگوی کوتاه X + Y (مثلاً 100+20 یا 100 + 20)
+  const plusMatch = text.match(/(?:^|\s)(\d+(?:\.\d+)?)\s*\+\s*(\d+(?:\.\d+)?)(?=\s|$|[^\d.])/);
+  if (plusMatch) {
+    out.buyQty = Number(plusMatch[1]);
+    out.freeQty = Number(plusMatch[2]);
+  }
+
+  // ۲. استخراج مهلت چک (مثلاً «چک 6 ماهه»، «مهلت 5 ماه»، «6 ماهه»، یا «نقد»)
+  const monthMatch =
+    text.match(/(?:چک|مهلت|راس|رأس|تسویه|مدت)\s*(?:هم\s*)?(?:مهلت\s*)?(\d+(?:\.\d+)?)\s*ماه/) ??
+    text.match(/(\d+(?:\.\d+)?)\s*ماهه/) ??
+    text.match(/(\d+(?:\.\d+)?)\s*ماه\s*(?:چک|مهلت)/);
+  if (monthMatch) {
+    out.chequeMonths = Math.round(Number(monthMatch[1]));
+  } else if (/(?:^|\s)(?:نقد|نقدی)(?:\s|$)/.test(text) && !/تخفیف\s*نقد/.test(text)) {
+    out.chequeMonths = 0;
+  }
+
+  // ۳. استخراج تخفیف زودپرداخت (مثلاً «تخفیف 2 درصد» یا «2% تخفیف»)
+  const discMatch =
+    text.match(/تخفیف[^\d]*(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)/) ??
+    text.match(/(\d+(?:\.\d+)?)\s*(?:%|٪|درصد)\s*تخفیف/);
+  if (discMatch) {
+    out.discountPerMonth = Number(discMatch[1]) / 100;
+  }
+
+  // ۴. اگر الگوی X+Y نبود، استخراج تعداد خرید و تعداد آفر از متن طبیعی
+  if (out.buyQty === undefined || out.freeQty === undefined) {
+    const buyMatch =
+      text.match(/(\d+(?:\.\d+)?)\s*(?:عدد|تا|بسته|جعبه|ورق)?\s*(?:بخر\w*|خرید\w*|سفارش)/) ??
+      text.match(/(?:خرید|سفارش|به ازای(?:\s*هر)?)\s*(\d+(?:\.\d+)?)\s*(?:عدد|تا|بسته|جعبه)?/);
+    const freeMatch =
+      text.match(/(\d+(?:\.\d+)?)\s*(?:عدد|تا|بسته|جعبه|ورق)?\s*(?:آفر|افر|رایگان|جایزه|بونوس|هدیه|اشانتیون)/) ??
+      text.match(/(?:آفر|افر|رایگان|جایزه|بونوس|هدیه)\s*(\d+(?:\.\d+)?)\s*(?:عدد|تا|بسته|جعبه)?/) ??
+      text.match(/(?:بهت|به شما|می‌دهم|میدهم|میده|بگیر\w*)\s*(\d+(?:\.\d+)?)\s*(?:عدد|تا)?\s*(?:آفر|افر|رایگان|جایزه|بونوس)?/);
+
+    if (buyMatch && out.buyQty === undefined) out.buyQty = Number(buyMatch[1]);
+    if (freeMatch && out.freeQty === undefined) out.freeQty = Number(freeMatch[1]);
+
+    // اگر هنوز هر دو پیدا نشده‌اند و دو عدد اول جمله قبل از ماه چک آمده‌اند (مثلاً «100 به 20» یا «100 تا 20 تا»)
+    if (out.buyQty === undefined || out.freeQty === undefined) {
+      const cleaned = text
+        .replace(/(?:چک|مهلت|راس|رأس|تسویه|مدت)?\s*\d+(?:\.\d+)?\s*ماهه?/g, ' ')
+        .replace(/\d+(?:\.\d+)?\s*(?:%|٪|درصد)/g, ' ');
+      const nums = [...cleaned.matchAll(/\d+(?:\.\d+)?/g)].map((m) => Number(m[0]));
+      if (nums.length >= 2) {
+        if (out.buyQty === undefined) out.buyQty = nums[0];
+        if (out.freeQty === undefined) out.freeQty = nums[1];
+      }
+    }
+  }
+
+  return out;
+}
+
+export interface QuickOfferRow {
+  id: string;
+  title: string;
+  rawText: string;
+  buyQty: number;
+  freeQty: number;
+  chequeMonths: number;
+  discountPerMonth: number;
+  priceOverride?: number;
+}
+
+export interface QuickCompareContext {
+  /** مصرف ماهانهٔ داروخانه از این دارو */
+  monthlyUse: number;
+  /** قیمت خرید واحد (فی) پایه به ریال؛ اگر ۰ باشد روی پایهٔ فرضی ۱۰۰٬۰۰۰ ریال سنجیده می‌شود */
+  unitPrice: number;
+  /** هزینهٔ پول ماهانه (کسر، مثلاً 0.03) */
+  r: number;
+  /** مدت چک خرید عادی مبنا (ماه) */
+  normalMonths: number;
+  /** ماه تا انقضا */
+  monthsToExpiry: number;
+  /** حاشیهٔ امن انقضا (ماه) */
+  safetyMonths: number;
+  /** موجودی فعلی داروخانه */
+  stock: number;
+}
+
+export interface QuickOfferEvaluation {
+  id: string;
+  title: string;
+  buyQty: number;
+  freeQty: number;
+  totalQty: number;
+  chequeMonths: number;
+  bestPayMonth: number;
+  /** درصد تخفیف کالایی صرف (فقط بونوس): Y ÷ (X + Y) */
+  bonusDiscountRate: number;
+  /** درصد تخفیف واقعی امروز با احتساب بونوس + مهلت چک + ارزش زمانی پول (و کسر واحدهای منقضی‌شده) */
+  realDiscountRate: number;
+  /** مبلغ کل پرداختی اسمی */
+  nominalPaid: number;
+  /** ارزش فعلی کل پرداختی به پول امروز */
+  presentPaid: number;
+  /** قیمت تمام‌شدهٔ اسمی هر واحد */
+  nominalUnitCost: number;
+  /** قیمت تمام‌شدهٔ واقعی هر واحد قابل فروش به ارزش پول امروز */
+  presentUnitCost: number;
+  /** ماه‌های لازم برای فروش کل بار (بر اساس مصرف ماهانه) */
+  monthsToSell: number;
+  /** آیا قبل از سررسید چک کل بار فروش می‌رود؟ */
+  sellsBeforeCheque: boolean;
+  /** تعداد قابل فروش تا تاریخ انقضا */
+  sellableQty: number;
+  /** تعداد در معرض انقضا */
+  unsoldQty: number;
+  /** آیا خطر انقضا دارد؟ */
+  expiryRisky: boolean;
+  /** مزیت ارزش فعلی کل این خرید نسبت به خرید عادی ماه‌به‌ماه (ریال) */
+  totalAdvantage: number;
+  /** مزیت ارزش فعلی به ازای هر واحد قابل فروش (ریال) */
+  unitAdvantage: number;
+}
+
+/** ارزیابی یک پیشنهاد در حالت مقایسهٔ سریع چند شرکت */
+export function evaluateQuickOffer(row: QuickOfferRow, ctx: QuickCompareContext): QuickOfferEvaluation {
+  const basePrice = ctx.unitPrice > 0 ? ctx.unitPrice : 100_000;
+  const itemPrice = row.priceOverride && row.priceOverride > 0 ? row.priceOverride : basePrice;
+  const buyQty = Math.max(0, row.buyQty);
+  const freeQty = Math.max(0, row.freeQty);
+  const totalQty = buyQty + freeQty;
+  const chequeMonths = Math.max(0, Math.round(row.chequeMonths));
+  const discountPerMonth = Math.max(0, row.discountPerMonth || 0);
+
+  // پیدا کردن بهترین ماه پرداخت (نقد با تخفیف زودپرداخت یا چک در سررسید)
+  let bestPayMonth = chequeMonths;
+  let nominalPaid = buyQty * itemPrice;
+  let presentPaid = presentValue(nominalPaid, ctx.r, chequeMonths);
+
+  for (let m = 0; m <= chequeMonths; m++) {
+    const disc = earlyPayDiscount(discountPerMonth, chequeMonths, m);
+    const paid = buyQty * itemPrice * (1 - disc);
+    const pv = presentValue(paid, ctx.r, m);
+    if (pv < presentPaid - 1e-6) {
+      presentPaid = pv;
+      nominalPaid = paid;
+      bestPayMonth = m;
+    }
+  }
+
+  const bonusDiscountRate = totalQty > 0 ? 1 - (buyQty * itemPrice) / (totalQty * basePrice) : 0;
+  const nominalUnitCost = effectiveUnitCost(nominalPaid, buyQty, freeQty);
+
+  const monthlyUse = Math.max(0, ctx.monthlyUse);
+  const monthsToExpiry = ctx.monthsToExpiry > 0 ? ctx.monthsToExpiry : 18;
+  const safetyMonths = ctx.safetyMonths >= 0 ? ctx.safetyMonths : 2;
+  const stock = Math.max(0, ctx.stock || 0);
+
+  const sellTime = monthlyUse > 0 ? (stock + totalQty) / monthlyUse : 0;
+  const maxSellableBeforeExpiry = monthlyUse > 0 ? Math.max(0, monthlyUse * monthsToExpiry - stock) : totalQty;
+  const sellableQty = monthlyUse > 0 ? Math.min(totalQty, maxSellableBeforeExpiry) : totalQty;
+  const unsoldQty = Math.max(0, totalQty - sellableQty);
+  const expiryRisky = monthlyUse > 0 && sellTime > Math.max(0, monthsToExpiry - safetyMonths);
+
+  // قیمت تمام‌شدهٔ واقعی هر واحد قابل فروش به پول امروز
+  const presentUnitCost = sellableQty > 0 ? presentPaid / sellableQty : Infinity;
+  const realDiscountRate = sellableQty > 0 && basePrice > 0 ? 1 - presentUnitCost / basePrice : -1;
+
+  // محاسبهٔ مزیت نسبت به سناریوی مبنای یکسان (خرید ماه‌به‌ماه به اندازهٔ مصرف ماهانه با چک عادی)
+  let baselinePresentPaid = 0;
+  if (monthlyUse > 0 && sellableQty > 0) {
+    const syntheticInput: OfferInput = {
+      price: itemPrice,
+      consumerPrice: basePrice,
+      qty: buyQty,
+      everyX: buyQty > 0 ? buyQty : 1,
+      freeY: freeQty,
+      baseMonths: chequeMonths,
+      discountPerMonth,
+      stock,
+      monthsToExpiry,
+      safetyMonths,
+      monthlyUse,
+      r: ctx.r,
+      mix: [],
+      normalPrice: basePrice,
+      normalMonths: Math.max(0, Math.round(ctx.normalMonths)),
+      normalQty: monthlyUse,
+    };
+    baselinePresentPaid = present(normalPayments(syntheticInput, sellableQty), ctx.r);
+  } else {
+    baselinePresentPaid = presentValue(sellableQty * basePrice, ctx.r, Math.max(0, Math.round(ctx.normalMonths)));
+  }
+
+  const totalAdvantage = baselinePresentPaid - presentPaid;
+  const unitAdvantage = sellableQty > 0 ? totalAdvantage / sellableQty : 0;
+
+  return {
+    id: row.id,
+    title: row.title || 'پیشنهاد',
+    buyQty,
+    freeQty,
+    totalQty,
+    chequeMonths,
+    bestPayMonth,
+    bonusDiscountRate,
+    realDiscountRate,
+    nominalPaid,
+    presentPaid,
+    nominalUnitCost,
+    presentUnitCost,
+    monthsToSell: sellTime,
+    sellsBeforeCheque: monthlyUse > 0 ? sellTime <= chequeMonths + 1e-6 : true,
+    sellableQty,
+    unsoldQty,
+    expiryRisky,
+    totalAdvantage,
+    unitAdvantage,
+  };
+}
+
+/** مقایسهٔ چند پیشنهاد و تعیین برنده بر اساس کمترین قیمت تمام‌شدهٔ واقعی امروز (با رعایت عدم انقضا در صورت امکان) */
+export function compareQuickOffers(rows: QuickOfferRow[], ctx: QuickCompareContext) {
+  const valid = rows
+    .filter((r) => r.buyQty > 0 && r.buyQty + r.freeQty > 0)
+    .map((r) => evaluateQuickOffer(r, ctx));
+
+  if (valid.length === 0) return { evaluations: [] as QuickOfferEvaluation[], winner: null as QuickOfferEvaluation | null, runnerUp: null as QuickOfferEvaluation | null };
+
+  // مرتب‌سازی: پیشنهادهای بدون خطر انقضا اولویت دارند، سپس بیشترین تخفیف واقعی امروز (کمترین قیمت تمام‌شدهٔ امروز هر واحد)
+  const sorted = [...valid].sort((a, b) => {
+    if (a.expiryRisky !== b.expiryRisky) return a.expiryRisky ? 1 : -1;
+    if (Math.abs(b.realDiscountRate - a.realDiscountRate) > 1e-6) return b.realDiscountRate - a.realDiscountRate;
+    return b.totalAdvantage - a.totalAdvantage;
+  });
+
+  return {
+    evaluations: valid,
+    winner: sorted[0] ?? null,
+    runnerUp: sorted[1] ?? null,
+  };
+}
+
