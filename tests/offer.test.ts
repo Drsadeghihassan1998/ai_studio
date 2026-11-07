@@ -170,5 +170,45 @@ describe('بقیهٔ محاسبات', () => {
     expect(cmp.winner!.realDiscountRate).toBeGreaterThan(cmp.runnerUp!.realDiscountRate);
     expect(cmp.winner?.monthsToSell).toBeCloseTo(4, 2);
   });
+  it('مقایسهٔ سریع: رتبه‌بندی بر اساس مزیت نسبت به خرید عادی (totalAdvantage) نه فقط تخفیف واحد', () => {
+    const ctx = {
+      monthlyUse: 50,
+      unitPrice: 100000,
+      r: 0.03,
+      normalMonths: 3,
+      monthsToExpiry: 36,
+      safetyMonths: 2,
+      stock: 0,
+    };
+    const offerA = { id: 'A', title: 'پیشنهاد A', rawText: '', buyQty: 1000, freeQty: 250, chequeMonths: 6, discountPerMonth: 0 };
+    const offerB = { id: 'B', title: 'پیشنهاد B', rawText: '', buyQty: 50, freeQty: 10, chequeMonths: 6, discountPerMonth: 0 };
+
+    const cmp = compareQuickOffers([offerA, offerB], ctx);
+    const evA = cmp.evaluations.find((e) => e.id === 'A')!;
+    const evB = cmp.evaluations.find((e) => e.id === 'B')!;
+
+    expect(Math.abs(evA.totalAdvantage - -1680617)).toBeLessThanOrEqual(1);
+    expect(Math.abs(evB.totalAdvantage - 1276774)).toBeLessThanOrEqual(1);
+    expect(evA.realDiscountRate).toBeCloseTo(0.33, 4);
+    expect(evB.realDiscountRate).toBeCloseTo(0.3021, 4);
+    expect(cmp.winner?.id).toBe('B');
+    expect(cmp.noneBeatsNormal).toBe(false);
+  });
+  it('مقایسهٔ سریع: اگر همهٔ پیشنهادها نسبت به خرید عادی زیان‌ده باشند، noneBeatsNormal برابر true است', () => {
+    const ctx = {
+      monthlyUse: 50,
+      unitPrice: 100000,
+      r: 0.03,
+      normalMonths: 3,
+      monthsToExpiry: 36,
+      safetyMonths: 2,
+      stock: 0,
+    };
+    const offerA = { id: 'A', title: 'پیشنهاد A', rawText: '', buyQty: 1000, freeQty: 250, chequeMonths: 6, discountPerMonth: 0 };
+
+    const cmp = compareQuickOffers([offerA], ctx);
+    expect(cmp.noneBeatsNormal).toBe(true);
+  });
 });
+
 

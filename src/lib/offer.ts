@@ -464,13 +464,23 @@ export interface QuickOfferEvaluation {
   unsoldQty: number;
   /** آیا خطر انقضا دارد؟ */
   expiryRisky: boolean;
+  /** ارزش فعلی کل پرداخت‌ها در سناریوی خرید عادی ماه‌به‌ماه (ریال) */
+  baselinePresentPaid: number;
   /** مزیت ارزش فعلی کل این خرید نسبت به خرید عادی ماه‌به‌ماه (ریال) */
   totalAdvantage: number;
   /** مزیت ارزش فعلی به ازای هر واحد قابل فروش (ریال) */
   unitAdvantage: number;
 }
 
-/** ارزیابی یک پیشنهاد در حالت مقایسهٔ سریع چند شرکت */
+/**
+ * ارزیابی یک پیشنهاد در حالت مقایسهٔ سریع چند شرکت.
+ * فرمول تخفیف واقعی امروز هر واحد (realDiscountRate):
+ *   presentUnitCost = presentPaid / sellableQty
+ *   realDiscountRate = 1 - (presentUnitCost / basePrice)
+ *   (ارزش امروز پرداختی هر واحد قابل فروش نسبت به فی پایه؛ زمان فروش را در نظر نمی‌گیرد)
+ * فرمول مزیت نسبت به خرید عادی ماه‌به‌ماه (totalAdvantage):
+ *   totalAdvantage = baselinePresentPaid - presentPaid
+ */
 export function evaluateQuickOffer(row: QuickOfferRow, ctx: QuickCompareContext): QuickOfferEvaluation {
   const basePrice = ctx.unitPrice > 0 ? ctx.unitPrice : 100_000;
   const itemPrice = row.priceOverride && row.priceOverride > 0 ? row.priceOverride : basePrice;
@@ -510,7 +520,7 @@ export function evaluateQuickOffer(row: QuickOfferRow, ctx: QuickCompareContext)
   const unsoldQty = Math.max(0, totalQty - sellableQty);
   const expiryRisky = monthlyUse > 0 && sellTime > Math.max(0, monthsToExpiry - safetyMonths);
 
-  // قیمت تمام‌شدهٔ واقعی هر واحد قابل فروش به پول امروز
+  // قیمت تمام‌شدهٔ واقعی هر واحد قابل فروش به پول امروز (زمان فروش را در نظر نمی‌گیرد)
   const presentUnitCost = sellableQty > 0 ? presentPaid / sellableQty : Infinity;
   const realDiscountRate = sellableQty > 0 && basePrice > 0 ? 1 - presentUnitCost / basePrice : -1;
 
@@ -562,30 +572,47 @@ export function evaluateQuickOffer(row: QuickOfferRow, ctx: QuickCompareContext)
     sellableQty,
     unsoldQty,
     expiryRisky,
+    baselinePresentPaid,
     totalAdvantage,
     unitAdvantage,
   };
 }
 
-/** مقایسهٔ چند پیشنهاد و تعیین برنده بر اساس کمترین قیمت تمام‌شدهٔ واقعی امروز (با رعایت عدم انقضا در صورت امکان) */
+/**
+ * مقایسهٔ چند پیشنهاد و تعیین برنده.
+ * ترتیب رتبه‌بندی:
+ * ۱. اولویت با پیشنهادهای بدون خطر انقضا (!expiryRisky)
+ * ۲. بیشترین مزیت ارزش فعلی نسبت به خرید عادی ماه‌به‌ماه (totalAdvantage)
+ * ۳. در صورت برابری، بیشترین تخفیف واقعی امروز هر واحد (realDiscountRate)
+ * اگر totalAdvantage همهٔ پیشنهادها منفی یا صفر باشد، پرچم noneBeatsNormal: true برگردانده می‌شود.
+ */
 export function compareQuickOffers(rows: QuickOfferRow[], ctx: QuickCompareContext) {
   const valid = rows
     .filter((r) => r.buyQty > 0 && r.buyQty + r.freeQty > 0)
     .map((r) => evaluateQuickOffer(r, ctx));
 
-  if (valid.length === 0) return { evaluations: [] as QuickOfferEvaluation[], winner: null as QuickOfferEvaluation | null, runnerUp: null as QuickOfferEvaluation | null };
+  if (valid.length === 0) {
+    return {
+      evaluations: [] as QuickOfferEvaluation[],
+      winner: null as QuickOfferEvaluation | null,
+      runnerUp: null as QuickOfferEvaluation | null,
+      noneBeatsNormal: false,
+    };
+  }
 
-  // مرتب‌سازی: پیشنهادهای بدون خطر انقضا اولویت دارند، سپس بیشترین تخفیف واقعی امروز (کمترین قیمت تمام‌شدهٔ امروز هر واحد)
   const sorted = [...valid].sort((a, b) => {
     if (a.expiryRisky !== b.expiryRisky) return a.expiryRisky ? 1 : -1;
-    if (Math.abs(b.realDiscountRate - a.realDiscountRate) > 1e-6) return b.realDiscountRate - a.realDiscountRate;
-    return b.totalAdvantage - a.totalAdvantage;
+    if (Math.abs(b.totalAdvantage - a.totalAdvantage) > 1e-6) return b.totalAdvantage - a.totalAdvantage;
+    return b.realDiscountRate - a.realDiscountRate;
   });
+
+  const noneBeatsNormal = valid.every((e) => e.totalAdvantage <= 0);
 
   return {
     evaluations: valid,
     winner: sorted[0] ?? null,
     runnerUp: sorted[1] ?? null,
+    noneBeatsNormal,
   };
 }
 

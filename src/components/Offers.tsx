@@ -419,8 +419,9 @@ function QuickCompare({
     setRows((prev) => prev.filter((r) => r.id !== id));
   };
 
-  const { evaluations, winner, runnerUp } = useMemo(() => compareQuickOffers(rows, ctx), [rows, ctx]);
+  const { evaluations, winner, runnerUp, noneBeatsNormal } = useMemo(() => compareQuickOffers(rows, ctx), [rows, ctx]);
   const hasRealPrice = ctx.unitPrice > 0;
+  const effectiveBasePrice = ctx.unitPrice > 0 ? ctx.unitPrice : 100_000;
 
   return (
     <div className="grid grid-cols-1 gap-4">
@@ -501,13 +502,15 @@ function QuickCompare({
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {rows.map((row, idx) => {
           const ev = evaluations.find((e) => e.id === row.id);
-          const isWinner = winner && winner.id === row.id && evaluations.length > 1;
+          const isWinner = !noneBeatsNormal && winner && winner.id === row.id && evaluations.length > 1;
+          const worseThanNormal = ev ? ev.totalAdvantage <= 0 : false;
           return (
-            <Card key={row.id} className={isWinner ? 'border-good' : ''}>
+            <Card key={row.id} className={isWinner ? 'border-good' : worseThanNormal ? 'border-bad/50' : ''}>
               <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-cardtitle font-bold">پیشنهاد {faNumber(idx + 1)}</span>
                   {isWinner && <Badge tone="good">بهترین پیشنهاد</Badge>}
+                  {worseThanNormal && <Badge tone="bad">نخرید</Badge>}
                   {ev?.expiryRisky && <Badge tone="bad">خطر انقضا</Badge>}
                 </div>
                 <div className="flex items-center gap-2">
@@ -591,7 +594,20 @@ function QuickCompare({
                       <span className="font-bold text-ink">{faPercent(ev.bonusDiscountRate)}</span>
                     </div>
                     <div>
-                      <span className="block text-muted">تخفیف واقعی امروز (با چک)</span>
+                      <span className="flex items-center gap-1 text-muted">
+                        <span>تخفیف واقعی امروز (با چک)</span>
+                        <HowCalculated
+                          title={`تخفیف واقعی امروز (${ev.title})`}
+                          formula="۱ − (ارزش امروز پرداختی هر واحد قابل فروش ÷ فی پایه) — ارزش امروز پرداختی هر واحد قابل فروش نسبت به فی پایه؛ زمان فروش را در نظر نمی‌گیرد"
+                          inputs={[
+                            ['ارزش امروز کل پرداختی', money(ev.presentPaid)],
+                            ['تعداد قابل فروش تا انقضا', `${faNumber(ev.sellableQty)} عدد`],
+                            ['ارزش امروز هر واحد قابل فروش', money(ev.presentUnitCost)],
+                            ['فی پایه', money(effectiveBasePrice)],
+                          ]}
+                          result={['تخفیف واقعی امروز (بدون لحاظ زمان فروش)', faPercent(ev.realDiscountRate)]}
+                        />
+                      </span>
                       <span className="font-bold text-primary">{faPercent(ev.realDiscountRate)}</span>
                     </div>
                     {ctx.monthlyUse > 0 && (
@@ -624,58 +640,70 @@ function QuickCompare({
         </Button>
       </div>
 
-      {winner && evaluations.length >= 2 && (
-        <Card className="border-good">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Award size={22} className="text-good" aria-hidden />
-              <p className="text-key font-bold">برندهٔ مقایسه: {winner.title}</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge tone="good">تخفیف واقعی امروز: {faPercent(winner.realDiscountRate)}</Badge>
+      {winner && evaluations.length >= 1 && (
+        noneBeatsNormal ? (
+          <Card className="border-bad">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <TriangleAlert size={22} className="text-bad" aria-hidden />
+                <p className="text-key font-bold">هیچ‌کدام از خرید عادی ماه‌به‌ماه بهتر نیست</p>
+                <Badge tone="bad">نخرید</Badge>
+              </div>
               <HowCalculated
-                title="نحوهٔ انتخاب بهترین پیشنهاد"
-                formula="ارزش امروز پرداخت هر واحد = [تعداد خرید ÷ (تعداد خرید + آفر)] ÷ (۱ + هزینهٔ پول)^ماه چک"
+                title="چرا هیچ‌کدام از خرید عادی بهتر نیست؟"
+                formula="مزیت نسبت به خرید عادی = ارزش امروز خرید عادی ماه‌به‌ماه − ارزش امروز پرداخت این آفر"
                 inputs={[
-                  ['پیشنهاد برنده', `${winner.title} (${faNumber(winner.buyQty)} + ${faNumber(winner.freeQty)}، چک ${faNumber(winner.chequeMonths)} ماهه)`],
-                  ['تخفیف کالایی (فقط بونوس)', faPercent(winner.bonusDiscountRate)],
-                  ['هزینهٔ پول ماهانه', faPercent(ctx.r)],
-                  ['تخفیف واقعی امروز با مهلت چک', faPercent(winner.realDiscountRate)],
+                  ['بهترین پیشنهاد بررسی‌شده', `${winner.title} (${faNumber(winner.buyQty)} + ${faNumber(winner.freeQty)}، چک ${faNumber(winner.chequeMonths)} ماهه)`],
+                  ['ارزش امروز خرید عادی ماه‌به‌ماه', money(winner.baselinePresentPaid)],
+                  ['ارزش امروز پرداخت این آفر', money(winner.presentPaid)],
+                  ['زمان فروش کل بار', `${faNumber(winner.monthsToSell, 1)} ماه`],
                 ]}
-                result={['برنده', winner.title]}
+                result={['مزیت نسبت به خرید عادی', money(winner.totalAdvantage)]}
               />
             </div>
-          </div>
+            <p className="mt-4 text-body text-muted">
+              با توجه به مصرف ماهانهٔ <strong>{faNumber(ctx.monthlyUse)} عدد</strong> و هزینهٔ پول <strong>{faPercent(ctx.r)}</strong> در ماه، خواب سرمایه در قفسه باعث می‌شود ارزش امروز پرداخت همهٔ پیشنهادهای واردشده از خرید عادی ماه‌به‌ماه (با چک {faNumber(ctx.normalMonths)} ماهه) بیشتر تمام شود.
+            </p>
+          </Card>
+        ) : evaluations.length >= 2 ? (
+          <Card className="border-good">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Award size={22} className="text-good" aria-hidden />
+                <p className="text-key font-bold">برندهٔ مقایسه: {winner.title}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge tone="good">مزیت نسبت به خرید عادی: {money(winner.totalAdvantage)}</Badge>
+                <HowCalculated
+                  title="نحوهٔ انتخاب بهترین پیشنهاد"
+                  formula="رتبه‌بندی: ۱) بدون خطر انقضا ۲) بیشترین مزیت ارزش فعلی نسبت به خرید عادی ماه‌به‌ماه ۳) تخفیف واقعی هر واحد"
+                  inputs={[
+                    ['پیشنهاد برنده', `${winner.title} (${faNumber(winner.buyQty)} + ${faNumber(winner.freeQty)}، چک ${faNumber(winner.chequeMonths)} ماهه)`],
+                    ['ارزش امروز خرید عادی ماه‌به‌ماه', money(winner.baselinePresentPaid)],
+                    ['ارزش امروز پرداخت این آفر', money(winner.presentPaid)],
+                    ['مزیت نسبت به خرید عادی', money(winner.totalAdvantage)],
+                    ['تخفیف واقعی امروز هر واحد (بدون لحاظ زمان فروش)', faPercent(winner.realDiscountRate)],
+                  ]}
+                  result={['برنده', winner.title]}
+                />
+              </div>
+            </div>
 
-          <ul className="mt-4 grid gap-2 text-body">
-            <li>
-              ۱. با احتساب <strong>{faNumber(winner.freeQty)} عدد آفر رایگان</strong> در ازای خرید {faNumber(winner.buyQty)} عدد (تخفیف کالایی <strong>{faPercent(winner.bonusDiscountRate)}</strong>) و <strong>چک {faNumber(winner.chequeMonths)} ماهه</strong> (با هزینهٔ پول {faPercent(ctx.r)} در ماه)، قیمت تمام‌شدهٔ واقعی هر واحد به پول امروز <strong>{faPercent(winner.realDiscountRate)} کمتر از قیمت پایه</strong> است.
-            </li>
-            {runnerUp && (
+            <ul className="mt-4 grid gap-2 text-body">
               <li>
-                ۲. در مقایسه با <strong>{runnerUp.title}</strong> (تخفیف کالایی {faPercent(runnerUp.bonusDiscountRate)} و تخفیف واقعی امروز {faPercent(runnerUp.realDiscountRate)})،
-                {winner.bonusDiscountRate < runnerUp.bonusDiscountRate ? (
-                  <span>
-                    {' '}گرچه درصد بونوسِ <strong>{runnerUp.title}</strong> کمی بیشتر است، اما به دلیل <strong>مهلت چک بهتر در {winner.title}</strong>، ارزش امروز هر واحد در <strong>{winner.title}</strong> به میزان <strong>{faPercent(winner.realDiscountRate - runnerUp.realDiscountRate)}</strong> به‌صرفه‌تر تمام می‌شود.
-                  </span>
-                ) : (
-                  <span>
-                    {' '}<strong>{winner.title}</strong> به اندازهٔ <strong>{faPercent(winner.realDiscountRate - runnerUp.realDiscountRate)}</strong> روی هر واحد به نفع داروخانه است
-                    {hasRealPrice ? ` (${money(runnerUp.presentUnitCost - winner.presentUnitCost)} ارزان‌تر روی هر واحد به ارزش امروز)` : ''}.
-                  </span>
-                )}
+                ۱. در مقایسه با خرید عادی ماه‌به‌ماه (چک {faNumber(ctx.normalMonths)} ماهه)، پیشنهاد <strong>{winner.title}</strong> پس از در نظر گرفتن زمان فروش بار ({faNumber(winner.monthsToSell, 1)} ماه) به اندازهٔ <strong>{money(winner.totalAdvantage)}</strong> به ارزش پول امروز به نفع داروخانه است.
               </li>
-            )}
-            {ctx.monthlyUse > 0 && (
               <li>
-                ۳. با مصرف ماهانهٔ <strong>{faNumber(ctx.monthlyUse)} عدد</strong>، کل بارِ <strong>{faNumber(winner.totalQty)} عددی</strong> این پیشنهاد در <strong>{faNumber(winner.monthsToSell, 1)} ماه</strong> فروش می‌رود
-                {winner.sellsBeforeCheque
-                  ? ` که قبل از سررسید چک ${faNumber(winner.chequeMonths)} ماهه کاملاً نقد و فروخته می‌شود.`
-                  : `؛ توجه کنید که فروش کل بار حدود ${faNumber(winner.monthsToSell - winner.chequeMonths, 1)} ماه بیشتر از مهلت چک طول می‌کشد.`}
+                ۲. تخفیف واقعی امروز هر واحد قابل فروش نسبت به فی پایه <strong>{faPercent(winner.realDiscountRate)}</strong> است (ارزش امروز پرداختی هر واحد قابل فروش نسبت به فی پایه؛ زمان فروش را در نظر نمی‌گیرد).
               </li>
-            )}
-          </ul>
-        </Card>
+              {runnerUp && (
+                <li>
+                  ۳. در مقایسه با <strong>{runnerUp.title}</strong> (مزیت نسبت به خرید عادی: {money(runnerUp.totalAdvantage)} و تخفیف واقعی واحد: {faPercent(runnerUp.realDiscountRate)})، پیشنهاد <strong>{winner.title}</strong> به میزان <strong>{money(winner.totalAdvantage - runnerUp.totalAdvantage)}</strong> ارزش فعلی بیشتری ایجاد می‌کند.
+                </li>
+              )}
+            </ul>
+          </Card>
+        ) : null
       )}
 
       {evaluations.length > 0 && (
@@ -689,30 +717,41 @@ function QuickCompare({
             <table className="w-full">
               <thead>
                 <tr className="border-y border-line text-note text-muted">
-                  {[
-                    'پیشنهاد',
-                    'خرید + آفر (کل)',
-                    'مهلت چک',
-                    'تخفیف کالایی (بونوس)',
-                    'تخفیف واقعی امروز',
-                    'قیمت تمام‌شدهٔ اسمی واحد',
-                    'قیمت واحد به ارزش امروز',
-                    'زمان فروش کل بار',
-                    'مزیت کل نسبت به خرید عادی',
-                  ].map((h) => (
-                    <th key={h} scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">{h}</th>
-                  ))}
+                  <th scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">پیشنهاد</th>
+                  <th scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">خرید + آفر (کل)</th>
+                  <th scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">مهلت چک</th>
+                  <th scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">تخفیف کالایی (بونوس)</th>
+                  <th scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1">
+                      <span>تخفیف واقعی امروز</span>
+                      <HowCalculated
+                        title="تخفیف واقعی امروز"
+                        formula="۱ − (ارزش امروز پرداختی هر واحد قابل فروش ÷ فی پایه) — ارزش امروز پرداختی هر واحد قابل فروش نسبت به فی پایه؛ زمان فروش را در نظر نمی‌گیرد"
+                        inputs={[
+                          ['معنی شاخص', 'ارزش امروز پرداختی هر واحد قابل فروش نسبت به فی پایه؛ زمان فروش را در نظر نمی‌گیرد'],
+                          ['هزینهٔ پول ماهانه', faPercent(ctx.r)],
+                        ]}
+                        result={['تذکر', 'برای لحاظ شدن زمان خواب کالا در قفسه، ستون «مزیت نسبت به خرید عادی» ملاک برنده است']}
+                      />
+                    </span>
+                  </th>
+                  <th scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">قیمت تمام‌شدهٔ اسمی واحد</th>
+                  <th scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">قیمت واحد به ارزش امروز</th>
+                  <th scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">زمان فروش کل بار</th>
+                  <th scope="col" className="px-4 py-2 text-start font-medium whitespace-nowrap">مزیت نسبت به خرید عادی</th>
                 </tr>
               </thead>
               <tbody>
                 {evaluations.map((ev) => {
-                  const isWin = winner && winner.id === ev.id && evaluations.length > 1;
+                  const isWin = !noneBeatsNormal && winner && winner.id === ev.id && evaluations.length > 1;
+                  const isBad = ev.totalAdvantage <= 0;
                   return (
                     <tr key={ev.id} className={`border-b border-line last:border-0 ${isWin ? 'bg-app font-medium' : ''}`}>
                       <td className="px-4 py-2 whitespace-nowrap">
                         <span className="inline-flex items-center gap-2">
                           <span>{ev.title}</span>
                           {isWin && <Badge tone="good">برنده</Badge>}
+                          {isBad && <Badge tone="bad">نخرید</Badge>}
                         </span>
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap">
@@ -722,14 +761,42 @@ function QuickCompare({
                         {ev.chequeMonths === 0 ? 'نقد' : `${faNumber(ev.chequeMonths)} ماهه`}
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap">{faPercent(ev.bonusDiscountRate)}</td>
-                      <td className="px-4 py-2 whitespace-nowrap font-bold text-primary">{faPercent(ev.realDiscountRate)}</td>
+                      <td className="px-4 py-2 whitespace-nowrap font-bold text-primary">
+                        <span className="inline-flex items-center gap-1">
+                          <span>{faPercent(ev.realDiscountRate)}</span>
+                          <HowCalculated
+                            title={`تخفیف واقعی امروز (${ev.title})`}
+                            formula="ارزش امروز پرداختی هر واحد قابل فروش نسبت به فی پایه؛ زمان فروش را در نظر نمی‌گیرد"
+                            inputs={[
+                              ['ارزش امروز پرداختی کل', money(ev.presentPaid)],
+                              ['تعداد قابل فروش', `${faNumber(ev.sellableQty)} عدد`],
+                              ['ارزش امروز هر واحد قابل فروش', money(ev.presentUnitCost)],
+                              ['فی پایه', money(effectiveBasePrice)],
+                            ]}
+                            result={['تخفیف واقعی امروز', faPercent(ev.realDiscountRate)]}
+                          />
+                        </span>
+                      </td>
                       <td className="px-4 py-2 whitespace-nowrap"><Money rial={ev.nominalUnitCost} exact /></td>
                       <td className="px-4 py-2 whitespace-nowrap"><Money rial={ev.presentUnitCost} exact /></td>
                       <td className="px-4 py-2 whitespace-nowrap">
                         {ctx.monthlyUse > 0 ? `${faNumber(ev.monthsToSell, 1)} ماه` : '—'}
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap">
-                        <Money rial={ev.totalAdvantage} exact />
+                        <span className="inline-flex items-center gap-1">
+                          <Money rial={ev.totalAdvantage} exact />
+                          <HowCalculated
+                            title={`مزیت نسبت به خرید عادی (${ev.title})`}
+                            formula="ارزش امروز خرید عادی ماه‌به‌ماه − ارزش امروز پرداخت این آفر"
+                            inputs={[
+                              ['ارزش امروز خرید عادی ماه‌به‌ماه', money(ev.baselinePresentPaid)],
+                              ['ارزش امروز پرداخت این آفر', money(ev.presentPaid)],
+                              ['تعداد قابل فروش تا انقضا', `${faNumber(ev.sellableQty)} عدد`],
+                              ['زمان فروش کل بار', `${faNumber(ev.monthsToSell, 1)} ماه`],
+                            ]}
+                            result={['مزیت نسبت به خرید عادی', money(ev.totalAdvantage)]}
+                          />
+                        </span>
                       </td>
                     </tr>
                   );
