@@ -11,7 +11,8 @@ import {
   advantage, decide, expiryCheck, liquidity, monthsToSell, offerCashSeries, paymentOptions, paymentPhrase, presentProfit, sensitivity,
   totalUnits, verdictText, type CashContext, type MixRow, type OfferInput,
 } from '../lib/offer';
-import { matchKey, normalizeText } from '../lib/text';
+import { drugTitle, fullDrugDose, fullDrugName, searchDrugs } from '../lib/drugname';
+import { normalizeText } from '../lib/text';
 import { useCashModel } from '../lib/useCashModel';
 import { Badge, Button, Card, CardTitle, ConfirmButton, EmptyState, PageHeader, PageSkeleton, Segmented, type Tone } from './ui/basics';
 import { DateField, Field, MoneyField, MoreSettings, NumberField, PercentField, SelectBox, TextField } from './ui/fields';
@@ -49,36 +50,46 @@ function monthsUntil(iso: string): number {
 
 function DrugPicker({ drugs, onPick }: { drugs: Drug[]; onPick: (d: Drug) => void }) {
   const [query, setQuery] = useState('');
-  const results = useMemo(() => {
-    const words = matchKey(query).split(' ').filter(Boolean);
-    if (words.length === 0) return [];
-    return drugs.filter((d) => words.every((w) => d.searchText.includes(w))).slice(0, 5);
-  }, [query, drugs]);
+  const aliases = useLiveQuery(() => db.drugAliases.toArray()) ?? [];
+  const results = useMemo(() => searchDrugs(drugs, query, aliases, 25), [query, drugs, aliases]);
   return (
     <div>
       <label htmlFor="offer-drug" className="mb-1 block text-note font-medium">دارو از بانک</label>
       <input
         id="offer-drug"
         type="search"
-        placeholder="جستجو با نام یا کد"
+        placeholder="جستجو با نام، ترکیب یا کد"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         className="min-h-11 w-full rounded-xl border border-line bg-card px-4 text-ink"
       />
-      {results.map((drug) => (
-        <button
-          key={drug.id}
-          type="button"
-          dir="auto"
-          onClick={() => {
-            onPick(drug);
-            setQuery('');
-          }}
-          className="block min-h-11 w-full border-b border-line py-2 text-start hover:text-primary"
-        >
-          {drug.genericName} {drug.dose} {drug.form}
-        </button>
-      ))}
+      {results.length > 0 && (
+        <div className="mt-1 max-h-60 overflow-y-auto rounded-xl border border-line bg-card shadow-card">
+          {results.map((drug) => {
+            const name = fullDrugName(drug);
+            const dose = fullDrugDose(drug);
+            const form = drug.form || drug.formFamily;
+            return (
+              <button
+                key={drug.id}
+                type="button"
+                dir="auto"
+                onClick={() => {
+                  onPick(drug);
+                  setQuery('');
+                }}
+                className="flex min-h-11 w-full flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2 text-start last:border-0 hover:bg-app hover:text-primary"
+              >
+                <span className="font-medium">
+                  {name}
+                  {dose ? ` ${dose}` : ''}
+                </span>
+                {form && <span className="text-note text-muted">{form}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -439,7 +450,7 @@ export function Offers() {
     });
     const price = latest?.item.unitPrice ?? current.price;
     setForm({
-      ...current, title: `${drug.genericName} ${drug.dose ?? ''}`.trim(), drugId: drug.id, price, normalPrice: price,
+      ...current, title: drugTitle(drug), drugId: drug.id, price, normalPrice: price,
       consumerPrice: drug.price, stock, monthlyUse: use || current.monthlyUse, normalQty: use || current.normalQty, mix,
     });
   };

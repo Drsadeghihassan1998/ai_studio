@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { X } from 'lucide-react';
 import { db, type Coverage, type Drug, type Insurer, type PriceList } from '../lib/db';
 import { deleteDrug, insurerColumn, type InsurerColumn } from '../lib/drugbank';
+import { fullDrugDose, fullDrugName } from '../lib/drugname';
 import { faDate, faNumber } from '../lib/format';
 import { normalizeText } from '../lib/text';
 import { Badge, Button, ConfirmButton, type Tone } from './ui/basics';
@@ -136,7 +137,7 @@ export function DrugCard({
       open
       wide
       onClose={onClose}
-      title={drug.genericName}
+      title={fullDrugName(drug)}
       footer={
         <>
           <Button onClick={onEdit}>ویرایش</Button>
@@ -156,7 +157,7 @@ export function DrugCard({
       <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {[
           ['شکل', drug.form || drug.formFamily],
-          ['دوز', drug.dose || '—'],
+          ['دوز', fullDrugDose(drug) || '—'],
           ['کد برند', drug.brandCode || '—'],
           ['کد ژنریک', drug.genericCode || '—'],
         ].map(([label, value]) => (

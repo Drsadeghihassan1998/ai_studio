@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Plus, Trash2, TriangleAlert } from 'lucide-react';
 import { db, type Coverage, type Drug, type PaymentType } from '../lib/db';
 import { saveManualDrug } from '../lib/drugbank';
+import { drugTitle, fullDrugDose, fullDrugName, searchDrugs } from '../lib/drugname';
 import { faNumber, faPercent } from '../lib/format';
 import {
   buildMatchIndex, draftTotal, draftWarnings, emptyItem, fillPrice, lineOf, matchItem, newKey, payableOf, planCheques,
@@ -34,11 +35,7 @@ function DrugMatch({
 }) {
   const toast = useToast();
   const [query, setQuery] = useState('');
-  const results = useMemo(() => {
-    const words = matchKey(query).split(' ').filter(Boolean);
-    if (words.length === 0) return [];
-    return index.drugs.filter((d) => words.every((w) => d.searchText.includes(w))).slice(0, 5);
-  }, [query, index]);
+  const results = useMemo(() => searchDrugs(index.drugs, query, [], 25), [query, index]);
 
   const choose = (drug: Drug) => {
     onChange({
@@ -56,7 +53,7 @@ function DrugMatch({
       <p className="flex flex-wrap items-center gap-2 text-note">
         <Badge tone="good">{item.matchedBy === 'code' ? 'با کد' : item.matchedBy === 'alias' ? 'نام تأییدشده' : 'وصل شد'}</Badge>
         <span dir="auto">
-          {item.name} ← {matched.genericName} {matched.dose}
+          {item.name} ← {drugTitle(matched)}
         </span>
         <Button
           variant="text"
@@ -78,7 +75,7 @@ function DrugMatch({
           return (
             drug && (
               <Button key={s.drugId} className="min-h-9 text-note" dir="auto" onClick={() => choose(drug)}>
-                {drug.genericName} {drug.dose}
+                {drugTitle(drug)}
               </Button>
             )
           );
@@ -108,17 +105,30 @@ function DrugMatch({
           داروی تازه بساز
         </Button>
       </div>
-      {results.map((drug) => (
-        <button
-          key={drug.id}
-          type="button"
-          dir="auto"
-          onClick={() => choose(drug)}
-          className="block min-h-11 w-full border-b border-line py-2 text-start hover:text-primary"
-        >
-          {drug.genericName} {drug.dose} {drug.form}
-        </button>
-      ))}
+      {results.length > 0 && (
+        <div className="mt-1 max-h-60 overflow-y-auto rounded-xl border border-line bg-card shadow-card">
+          {results.map((drug) => {
+            const name = fullDrugName(drug);
+            const dose = fullDrugDose(drug);
+            const form = drug.form || drug.formFamily;
+            return (
+              <button
+                key={drug.id}
+                type="button"
+                dir="auto"
+                onClick={() => choose(drug)}
+                className="flex min-h-11 w-full flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2 text-start last:border-0 hover:bg-app hover:text-primary"
+              >
+                <span className="font-medium">
+                  {name}
+                  {dose ? ` ${dose}` : ''}
+                </span>
+                {form && <span className="text-note text-muted">{form}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   buildContext, drugConsumption, forecastDoctor, mixProblem, newDoctor, SHIFT_LABEL, SOURCE_LABEL, totalsOf, WEEK_DAYS,
   type DoctorForecast, type ForecastContext, type ProfileRow, type Source,
 } from '../lib/doctors';
+import { drugTitle, fullDrugDose, fullDrugName, searchDrugs } from '../lib/drugname';
 import { faNumber, faPercent } from '../lib/format';
 import { firstBelow, lowestMonth, runCash, streamOf, type CashInputs, type CashMonth } from '../lib/cashflow';
 import { currentMonthKey, monthLabel } from '../lib/jalali';
@@ -30,35 +31,37 @@ const SourceBadge = ({ source }: { source: Source }) => (
 
 function DrugSearch({ drugs, onPick }: { drugs: Drug[]; onPick: (drug: Drug) => void }) {
   const [query, setQuery] = useState('');
-  const results = useMemo(() => {
-    const words = matchKey(query).split(' ').filter(Boolean);
-    if (words.length === 0) return [];
-    return drugs.filter((d) => words.every((w) => d.searchText.includes(w))).slice(0, 5);
-  }, [query, drugs]);
+  const aliases = useLiveQuery(() => db.drugAliases.toArray()) ?? [];
+  const results = useMemo(() => searchDrugs(drugs, query, aliases, 25), [query, drugs, aliases]);
   return (
     <div>
       <input
         type="search"
         aria-label="جستجوی دارو در بانک"
-        placeholder="افزودن دارو: جستجو با نام یا کد"
+        placeholder="افزودن دارو: جستجو با نام (تک یا ترکیبی)، نام تجاری یا کد"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         className="min-h-11 w-full rounded-xl border border-line bg-card px-4 text-ink"
       />
-      {results.map((drug) => (
-        <button
-          key={drug.id}
-          type="button"
-          dir="auto"
-          onClick={() => {
-            onPick(drug);
-            setQuery('');
-          }}
-          className="block min-h-11 w-full border-b border-line py-2 text-start hover:text-primary"
-        >
-          {drug.genericName} {drug.dose} {drug.form}
-        </button>
-      ))}
+      {results.length > 0 && (
+        <div className="mt-1 max-h-60 overflow-y-auto rounded-xl border border-line bg-card shadow-card divide-y divide-line">
+          {results.map((drug) => (
+            <button
+              key={drug.id}
+              type="button"
+              dir="auto"
+              onClick={() => {
+                onPick(drug);
+                setQuery('');
+              }}
+              className="block min-h-11 w-full px-3 py-2 text-start hover:bg-app hover:text-primary"
+            >
+              <span className="font-medium">{fullDrugName(drug)}</span>{' '}
+              <span className="text-muted">{fullDrugDose(drug)} {drug.form || drug.formFamily}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -83,7 +86,7 @@ function ProfileEditor({
         <div key={row.profile.id ?? `${row.profile.drugId}-${i}`} className="border-b border-line py-2">
           <div className="flex items-center justify-between gap-2">
             <span dir="auto" className="min-w-0 font-medium">
-              {row.drug ? `${row.drug.genericName} ${row.drug.dose ?? ''}` : 'داروی حذف‌شده'}
+              {row.drug ? drugTitle(row.drug) : 'داروی حذف‌شده'}
             </span>
             <button
               type="button"
@@ -562,7 +565,7 @@ export function Doctors() {
                   {use.map((row) => (
                     <li key={row.drug.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-6 py-4 last:border-0">
                       <span className="min-w-0">
-                        <span dir="auto" className="block font-medium">{row.drug.genericName} {row.drug.dose}</span>
+                        <span dir="auto" className="block font-medium">{drugTitle(row.drug)}</span>
                         <span className="text-note text-muted">{row.doctors.map((d) => d.name).join('، ')}</span>
                       </span>
                       <span className="flex items-center gap-2">

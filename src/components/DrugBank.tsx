@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { CheckCheck, Pill, Search, Tags, TrendingUp } from 'lucide-react';
 import { db, type Coverage, type Drug } from '../lib/db';
 import { mergeDrugs, STATUS_LABELS } from '../lib/drugbank';
-import { FORM_FAMILIES } from '../lib/drugname';
+import { FORM_FAMILIES, drugTitle, fullDrugDose, fullDrugName, queryWords, searchDrugs } from '../lib/drugname';
 import { faDate, faNumber } from '../lib/format';
 import { go } from '../lib/route';
 import { matchKey, normalizeText } from '../lib/text';
@@ -79,9 +79,10 @@ function AllDrugs({ bank, onOpen }: { bank: Bank; onOpen: (id: number) => void }
   }, [bank.aliases]);
 
   const visible = useMemo(() => {
-    const words = matchKey(deferred).split(' ').filter(Boolean);
+    const words = queryWords(deferred);
     return bank.drugs.filter((drug) => {
-      const text = `${drug.searchText} ${aliasText.get(drug.id) ?? ''}`;
+      const text = `${drug.searchText} ${matchKey(fullDrugName(drug))} ${matchKey(fullDrugDose(drug))} ${aliasText.get(drug.id) ?? ''}`
+        .replace(/[+/,\-،؛()\\]+/g, ' ');
       if (!words.every((w) => text.includes(w))) return false;
       if (family && drug.formFamily !== family) return false;
       const covers = (coverByDrug.get(drug.id) ?? []).filter((c) => !insurer || String(c.insurerId) === insurer);
@@ -134,8 +135,8 @@ function AllDrugs({ bank, onOpen }: { bank: Bank; onOpen: (id: number) => void }
             >
               <span className="min-w-0">
                 <span dir="auto" className="block font-medium">
-                  {drug.genericName}
-                  {drug.dose ? ` ${drug.dose}` : ''}
+                  {fullDrugName(drug)}
+                  {fullDrugDose(drug) ? ` ${fullDrugDose(drug)}` : ''}
                 </span>
                 <span className="mt-1 flex flex-wrap items-center gap-2 text-note text-muted">
                   {drug.formFamily}
@@ -234,7 +235,7 @@ function PricesTab({ bank, onOpen }: { bank: Bank; onOpen: (id: number) => void 
               className="flex w-full flex-wrap items-center justify-between gap-2 px-6 py-4 text-start hover:bg-app"
             >
               <span>
-                <span dir="auto" className="block font-medium">{drug(h.drugId)?.genericName}</span>
+                <span dir="auto" className="block font-medium">{drug(h.drugId) ? drugTitle(drug(h.drugId)!) : ''}</span>
                 <span className="text-note text-muted">{bank.insurers.find((i) => i.id === h.insurerId)?.name}</span>
               </span>
               <span className="flex flex-wrap items-center gap-2">
@@ -256,11 +257,7 @@ function AliasesTab({ bank, onOpen }: { bank: Bank; onOpen: (id: number) => void
   const [alias, setAlias] = useState('');
   const [query, setQuery] = useState('');
   const deferred = useDeferredValue(query);
-  const results = useMemo(() => {
-    const words = matchKey(deferred).split(' ').filter(Boolean);
-    if (words.length === 0) return [];
-    return bank.drugs.filter((d) => words.every((w) => d.searchText.includes(w))).slice(0, 6);
-  }, [bank.drugs, deferred]);
+  const results = useMemo(() => searchDrugs(bank.drugs, deferred, bank.aliases, 20), [bank.drugs, bank.aliases, deferred]);
 
   const link = async (drugId: number) => {
     await db.drugAliases.add({ alias: normalizeText(alias), drugId } as never);
@@ -287,7 +284,10 @@ function AliasesTab({ bank, onOpen }: { bank: Bank; onOpen: (id: number) => void
           <ul className="mt-2">
             {results.map((d) => (
               <li key={d.id} className="flex items-center justify-between gap-2 border-t border-line py-2">
-                <span dir="auto" className="min-w-0">{d.genericName} {d.dose}</span>
+                <span dir="auto" className="min-w-0">
+                  {drugTitle(d)}
+                  {(d.form || d.formFamily) ? <span className="ms-2 text-note text-muted">{d.form || d.formFamily}</span> : null}
+                </span>
                 <Button disabled={normalizeText(alias) === ''} onClick={() => link(d.id)}>
                   وصل کن
                 </Button>
@@ -305,7 +305,9 @@ function AliasesTab({ bank, onOpen }: { bank: Bank; onOpen: (id: number) => void
               <li key={a.id} className="border-b border-line last:border-0">
                 <button type="button" onClick={() => onOpen(a.drugId)} className="flex w-full justify-between gap-2 px-6 py-4 text-start hover:bg-app">
                   <span className="font-medium">{a.alias}</span>
-                  <span dir="auto" className="text-muted">{bank.drugs.find((d) => d.id === a.drugId)?.genericName}</span>
+                  <span dir="auto" className="text-muted">
+                    {bank.drugs.find((d) => d.id === a.drugId) ? drugTitle(bank.drugs.find((d) => d.id === a.drugId)!) : ''}
+                  </span>
                 </button>
               </li>
             ))}

@@ -3,7 +3,7 @@ import type { ShareBase } from './calc';
 import type { CashPolicy } from './cashflow';
 import type { Unit } from './format';
 import { currentMonthKey } from './jalali';
-import { formFamily } from './drugname';
+import { formFamily, fullDrugDose, fullDrugName } from './drugname';
 import { matchKey } from './text';
 
 // مدل دادهٔ کل برنامه. مبلغ‌ها ریال، درصدها کسر (۳٪ = 0.03)، ماه‌ها شمسی «1405-08»، تاریخ‌ها میلادی «2026-11-06».
@@ -369,9 +369,13 @@ export const SCHEMA_VERSION = 3;
 export function completeDrug<T extends Partial<Drug> & { genericName: string }>(drug: T) {
   const names = drug.names?.length ? drug.names : [drug.genericName];
   const codes = drug.codes ?? [drug.genericCode, drug.brandCode, drug.irc].filter((c): c is string => Boolean(c));
-  const parts = [...names, ...codes, drug.form, drug.dose];
+  const genericName = fullDrugName({ genericName: drug.genericName, names, manual: drug.manual });
+  const dose = fullDrugDose({ dose: drug.dose, names, manual: drug.manual }) || drug.dose;
+  const parts = [genericName, ...names, ...codes, drug.form, dose];
   return {
     ...drug,
+    genericName,
+    ...(dose !== undefined ? { dose } : {}),
     names,
     codes,
     formFamily: formFamily(`${drug.form ?? ''} ${names.join(' ')}`),

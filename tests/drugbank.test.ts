@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { coverageShares } from '../src/lib/calc';
 import { db, ensureDefaults, type Insurer } from '../src/lib/db';
-import { doseKey, formFamily, nameSimilarity } from '../src/lib/drugname';
+import { baseName, doseKey, doseOf, fullDrugDose, fullDrugName, formFamily, nameSimilarity, searchDrugs } from '../src/lib/drugname';
 import { applyList, insurerColumn, mergeDrugs, saveManualDrug, type ListRow } from '../src/lib/drugbank';
 import { balanceCheck, columnWarnings, detectMapping, mapRows, readWorkbook, SLOT_DEFS, UnreadableFile } from '../src/lib/import';
 
@@ -54,6 +54,43 @@ describe('تحلیل نام', () => {
     expect(nameSimilarity('COGRAFT®(TACROLIMUS )', 'TACROLIMUS 1 mg CAPSULE')).toBeGreaterThan(0.6);
     expect(nameSimilarity('VERAPAMIL  HCL', 'VERAPAMIL HYDROCHLORIDE 40 mg TABLET')).toBeGreaterThan(0.9);
     expect(nameSimilarity('ASPIRIN', 'METFORMIN')).toBeLessThan(0.6);
+  });
+  it('داروهای ترکیبی: نام کامل، دوز کامل و جستجو با ترکیب اول یا دوم', async () => {
+    expect(baseName('AMOXICILLIN 500 mg + CLAVULANIC ACID 125 mg TABLET ORAL')).toBe('AMOXICILLIN + CLAVULANIC ACID');
+    expect(doseOf('AMOXICILLIN 500 mg + CLAVULANIC ACID 125 mg TABLET ORAL')).toBe('500 mg + 125 mg');
+    expect(baseName('SACUBITRIL 24 mg / VALSARTAN 26 mg TABLET ORAL')).toBe('SACUBITRIL + VALSARTAN');
+    expect(doseOf('SACUBITRIL 24 mg / VALSARTAN 26 mg TABLET ORAL')).toBe('24 mg + 26 mg');
+
+    const t = await insurerByName('تأمین');
+    const rows: ListRow[] = [
+      { brandCode: '101', name: 'VALSARTAN 40 mg TABLET ORAL', price: 10000 },
+      { brandCode: '102', name: 'VALSARTAN 80 mg TABLET ORAL', price: 12000 },
+      { brandCode: '103', name: 'VALSARTAN 160 mg TABLET ORAL', price: 15000 },
+      { brandCode: '104', name: 'VALSARTAN 320 mg TABLET ORAL', price: 18000 },
+      { brandCode: '105', name: 'VALSARTAN 20 mg TABLET ORAL', price: 9000 },
+      { brandCode: '106', name: 'VALSARTAN 10 mg TABLET ORAL', price: 8000 },
+      { brandCode: '201', name: 'VALSARTAN 80 mg + AMLODIPINE 5 mg TABLET ORAL', price: 25000 },
+      { brandCode: '202', name: 'SACUBITRIL 24 mg / VALSARTAN 26 mg TABLET ORAL', price: 45000 },
+    ];
+    await applyList(t.id, rows, { fileName: 'combo' });
+    const drugs = await db.drugs.toArray();
+
+    // جستجو با جزء اول حتی وقتی بیش از ۵ دوز تک‌جزئی وجود دارد، داروی ترکیبی را بالا می‌آورد
+    const byFirst = searchDrugs(drugs, 'valsartan', []);
+    expect(byFirst.slice(0, 6).some((d) => fullDrugName(d).includes('AMLODIPINE'))).toBe(true);
+    expect(byFirst.some((d) => fullDrugName(d).includes('SACUBITRIL'))).toBe(true);
+
+    // جستجو با جزء دوم
+    const bySecond = searchDrugs(drugs, 'amlodipine', []);
+    expect(bySecond[0] && fullDrugName(bySecond[0])).toBe('VALSARTAN + AMLODIPINE');
+    expect(bySecond[0] && fullDrugDose(bySecond[0])).toBe('80 mg + 5 mg');
+
+    // جستجو با هر دو جزء یا جداکننده + و /
+    const byBoth = searchDrugs(drugs, 'amlodipine + valsartan', []);
+    expect(byBoth[0] && fullDrugName(byBoth[0])).toBe('VALSARTAN + AMLODIPINE');
+
+    const bySlash = searchDrugs(drugs, 'valsartan/', []);
+    expect(bySlash[0] && fullDrugName(bySlash[0])).toContain('VALSARTAN');
   });
 });
 
