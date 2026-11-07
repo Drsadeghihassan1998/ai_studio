@@ -3,7 +3,7 @@
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const FIRST = ['AGENTS.md', 'docs/BRIEF.md', 'package.json', 'vite.config.ts', 'tsconfig.json', 'index.html'];
+const FIRST = ['AGENTS.md', 'docs/BRIEF.md', 'package.json', 'vite.config.ts', 'tsconfig.json', 'index.html', 'server.ts'];
 const FOLDERS = ['src', 'tests', 'tools'];
 
 function walk(dir) {
